@@ -1,5 +1,6 @@
 -module(memory_server).
 -include("bifrost.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2]).
 
@@ -198,14 +199,17 @@ fetch_path({dir, Root, _}, [Current | Rest]) ->
             not_found
     end.
 
+new_file_info(Name, Type, Size) ->
+    #file_info{name=Name, 
+               mtime=erlang:localtime(),
+               type=Type,
+               mode=511, % 0777
+               gid=0,
+               uid=0,
+               size=Size}.
+
 new_directory(Name) ->
-    {dir, dict:new(), #file_info{name=Name, 
-                                 mtime=erlang:localtime(),
-                                 type=dir,
-                                 mode=511, % 0777
-                                 gid=0,
-                                 uid=0,
-                                 size=0}}.
+    {dir, dict:new(), new_file_info(Name, dir, 0)}.
 
 set_path(F, [[]|T], V) ->
     set_path(F, T, V);
@@ -232,5 +236,69 @@ set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
             FileInfo}
     end.
 
+%% Tests
 wrap_fs(Fs) ->
     #connection_state{module_state=#msrv_state{fs=Fs}}.
+
+create_fs() ->
+    new_directory("").
+
+new_file_info_test() ->
+    % TODO: need to mock erlang:localtime instead of relying
+    % on the speed of the computer
+    FileInfo = #file_info{name="Test",
+                          mtime=erlang:localtime(),
+                          type=file,
+                          mode=0511,
+                          gid=0,
+                          uid=0,
+                          size=20},
+    FileInfo = new_file_info("Test", file, 20).
+
+new_directory_test() ->
+    % TODO: need to mock erlang:localtime instead of relying
+    % on the speed of the computer
+    EmptyDictionary = dict:new(),
+    NewFileInfo = new_file_info("Test", dir, 0),
+    {dir, EmptyDictionary, NewFileInfo} = new_directory("Test").
+
+login_test() ->
+    OldState = #connection_state{},
+    NewState = #connection_state{module_state=#msrv_state{current_dir=[[]]}},
+    {true, NewState} = login(OldState, "a", "b").
+
+current_directory_test() ->
+    ModState1 = #msrv_state{current_dir = [[]]},
+    ModState2 = #msrv_state{current_dir = [[], "testing", "123"]},
+    State1 = #connection_state{module_state=ModState1},
+    State2 = #connection_state{module_state=ModState2},
+    "/" = current_directory(State1),
+    "/testing/123" = current_directory(State2).
+
+change_directory_test() ->
+    FS = set_path(create_fs(), ["testing", "123"], new_directory("123")),
+    ModStateBefore = #msrv_state{current_dir = [[], "testing", "123"], fs=FS},
+    ModStateAfter = #msrv_state{current_dir = [[], "testing"], fs=FS},
+    StateBefore = #connection_state{module_state=ModStateBefore},
+    StateAfter = #connection_state{module_state=ModStateAfter},
+    {ok, StateBefore} = change_directory(StateBefore, "."),
+    {ok, StateAfter} = change_directory(StateBefore, ".."),
+    {ok, StateAfter} = change_directory(StateBefore, "/testing"),
+    {error, StageBefore} = change_directory(StateBefore, "/magical/unicorn").
+
+remove_directory_test() ->
+    FSBefore = set_path(create_fs(), ["testing", "123"], new_directory("123")),
+    FSAfter = set_path(create_fs(), ["testing"], new_directory("testing")),
+    FSWithFile = set_path(FSBefore, ["testing", "123", "cheese"], {file, contents, new_file_info("cheese", file, 0)}),
+    ModStateBefore = #msrv_state{current_dir = [[], "testing"], fs=FSBefore},
+    ModStateAfter = #msrv_state{current_dir = [[], "testing"], fs=FSAfter},
+    ModStateWithFile = #msrv_state{current_dir = [[], "testing"], fs=FSWithFile},
+    StateBefore = #connection_state{module_state=ModStateBefore},
+    StateAfter = #connection_state{module_state=ModStateAfter},
+    StateWithFile = #connection_state{module_state=ModStateWithFile},
+    {ok, StateAfter} = remove_directory(StateBefore, "123"),
+    {ok, StateAfter} = remove_directory(StateBefore, "/testing/123"),
+    {error, not_found} = remove_directory(StateBefore, "monkey"),
+    {error, not_directory} = remove_directory(StateWithFile, "/testing/123/cheese"),
+    {error, not_empty} = remove_directory(StateWithFile, "/testing/123").
+

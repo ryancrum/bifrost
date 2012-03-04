@@ -18,5 +18,6 @@
           uid,
           gid,
           size,
-          mtime
+          mtime,
+          module_info
          }).

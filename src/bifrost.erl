@@ -12,6 +12,7 @@
 %% Include files
 %%--------------------------------------------------------------------
 -include("bifrost.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%--------------------------------------------------------------------
 %% External exports
@@ -297,6 +298,7 @@ list_files_to_socket(DataSocket, Files) ->
               Files),
     io:format("Done listing~n"),
     ok.
+
 %% OUTPUT FORMATTING
 %% Most of this code has been shamelessly/fully 
 %% yanked from jungerl/ftpd.erl
@@ -438,3 +440,25 @@ addr6([H4,H3,H2,H1|Addr],Acc) when H4<16,H3<16,H2<16,H1<16 ->
     addr6(Addr, [H4 + H3*16 + H2*256 + H1*4096 |Acc]);
 addr6([], Acc) -> {ok, list_to_tuple(Acc)};
 addr6(_, _) -> error.
+
+% TESTS
+strip_newlines_test() ->
+    "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
+    "testing again" = strip_newlines("testing again").
+
+parse_input_test() ->
+    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
+    {test, ""} = parse_input("Test\r\n"),
+    {test, "awesome"} = parse_input("Test awesome\r\n").
+
+format_access_test() ->
+    "rwxrwxrwx" = format_access(8#0777),
+    "rw-rw-rw-" = format_access(8#0666),
+    "r--rwxrwx" = format_access(8#0477),
+    "---------" = format_access(0).
+
+format_number_test() ->
+    "005" = format_number(5, 3, $0),
+    "500" = format_number(500, 2, $0),
+    "500" = format_number(500, 3, $0).
+
