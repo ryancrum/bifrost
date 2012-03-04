@@ -1,7 +1,7 @@
 -module(memory_server).
 -include("bifrost.hrl").
 
--export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2]).
+-export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2]).
 
 -define(debug, true).
 -ifdef(debug).
@@ -29,7 +29,7 @@ current_directory(State) ->
     end.
 
 make_directory(State, Directory) ->
-    Target = absolute_directory(State, Directory),
+    Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
         not_found ->
@@ -42,7 +42,7 @@ make_directory(State, Directory) ->
     end.
 
 change_directory(State, Directory) ->
-    Target = absolute_directory(State, Directory),
+    Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
         not_found ->
@@ -57,10 +57,51 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
+remove_file(State, File) ->
+    Target = absolute_path(State, File),
+    ModState = get_module_state(State),
+    Fs = get_fs(ModState),
+    case fetch_path(Fs, Target) of
+        not_found ->
+            {error, not_found};
+        {dir, _, _} ->
+            {error, not_file};
+        {file, _, _} ->
+            NewModState = ModState#msrv_state{fs=set_path(Fs, 
+                                                          Target, 
+                                                          remove)},
+            {ok, set_module_state(State, NewModState)};
+        _ ->
+            {error, unknown}
+    end.
+
+remove_directory(State, Directory) ->
+    Target = absolute_path(State, Directory),
+    ModState = get_module_state(State),
+    Fs = get_fs(ModState),
+    case fetch_path(Fs, Target) of
+        not_found ->
+            {error, not_found};
+        {file, _, _} ->
+            {error, not_directory};
+        {dir, Dict, _} ->
+            DictSize = dict:size(Dict),
+            if DictSize > 0 ->
+                    {error, not_empty};
+               true ->
+                    NewModState = ModState#msrv_state{fs=set_path(Fs, 
+                                                                  Target, 
+                                                                  remove)},
+                    {ok, set_module_state(State, NewModState)}
+            end;
+        _ ->
+            {error, unknown}
+    end.
+
 list_files(State, "") ->
     list_files(State, current_directory(State));
 list_files(State, Directory) ->
-    Target = absolute_directory(State, Directory),
+    Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
         not_found ->
@@ -87,7 +128,7 @@ get_fs(ModState) ->
 split_directory(DirString) ->
     string:tokens(DirString, "/").
 
-absolute_directory(State, Directory=[FirstChar | _]) ->
+absolute_path(State, Directory=[FirstChar | _]) ->
     Path = case FirstChar of
                $/ ->
                    [[]] ++ split_directory(Directory);
@@ -169,7 +210,12 @@ new_directory(Name) ->
 set_path(F, [[]|T], V) ->
     set_path(F, T, V);
 set_path({dir, Root, FileInfo}, [Current], Val) ->
-    {dir, dict:store(Current, Val, Root), FileInfo};
+    case Val of
+        remove ->
+            {dir, dict:erase(Current, Root), FileInfo};
+        _ ->
+            {dir, dict:store(Current, Val, Root), FileInfo}
+    end;
 set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
     case dict:is_key(Current, Root) of
         true ->

@@ -208,10 +208,12 @@ ftp_command(Socket, State, pass, Arg) ->
 ftp_command(Socket, State=#connection_state{authenticated_state=unauthenticated}, Command, _) ->
     respond(Socket, 530),
     {ok, State};
+
 ftp_command(Socket, State, pwd, _) ->
     Mod = State#connection_state.module,
     respond(Socket, 257, Mod:current_directory(State)),
     {ok, State};
+
 ftp_command(Socket, State, cwd, Arg) ->
     Mod = State#connection_state.module,
     case Mod:change_directory(State, Arg) of
@@ -222,6 +224,7 @@ ftp_command(Socket, State, cwd, Arg) ->
             respond(Socket, 450, "Unable to change directory"),
             {ok, State}
     end;
+
 ftp_command(Socket, State, mkd, Arg) ->
     Mod = State#connection_state.module,
     case Mod:make_directory(State, Arg) of
@@ -232,6 +235,7 @@ ftp_command(Socket, State, mkd, Arg) ->
             respond(Socket, 450, "Unable to create directory"),
             {ok, State}
     end;
+
 ftp_command(Socket, State, list, Arg) ->
     Mod = State#connection_state.module,
     DataSocket = data_connection(Socket, State),
@@ -244,6 +248,30 @@ ftp_command(Socket, State, list, Arg) ->
             gen_tcp:close(DataSocket),
             {ok, State}
     end;
+
+ftp_command(Socket, State, rmd, Arg) ->
+    Mod = State#connection_state.module,
+    case Mod:remove_directory(State, Arg) of
+        {ok, NewState} ->
+            respond(Socket, 200),
+            {ok, NewState};
+        {error, _} ->
+            respond(Socket, 450),
+            {ok, State}
+        end;
+
+
+ftp_command(Socket, State, dele, Arg) ->
+    Mod = State#connection_state.module,
+    case Mod:remove_file(State, Arg) of
+        {ok, NewState} ->
+            respond(Socket, 200),
+            {ok, NewState};
+        {error, _} ->
+            respond(Socket, 450),
+            {ok, State}
+        end;
+    
 ftp_command(Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
