@@ -10,7 +10,7 @@
 
 -record(msrv_state, 
         {
-          current_dir = [""],
+          current_dir = [[]],
           fs = new_directory("/")
          }).
 
@@ -22,7 +22,7 @@ login(State, Username, Password) ->
 
 current_directory(State) ->
     case current_directory_list(State) of
-        [] ->
+        [[]] ->
             "/";
         Path ->
             string:join(Path, "/")
@@ -57,17 +57,24 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
+list_files(State, "") ->
+    list_files(State, current_directory(State));
 list_files(State, Directory) ->
     Target = absolute_directory(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
         not_found ->
             {error, State};
-        {dir, Dict, _} ->
+        {dir, Dict, DirInfo} ->
+            {dir, _, ParentInfo} = fetch_parent(Fs, Target),
             lists:map(fun({_,{_, _, Info}}) -> Info end, 
-                      dict:to_list(Dict));
+                      dict:to_list(Dict)) ++
+                [DirInfo#file_info{name = "."}, 
+                 ParentInfo#file_info{name = ".."}];
         {file, _, Info} ->
-            [Info]
+            [Info];
+        _ ->
+            {error, State}
     end.
 
 %% priv
@@ -82,16 +89,18 @@ split_directory(DirString) ->
 
 absolute_directory(State, Directory=[FirstChar | _]) ->
     Path = case FirstChar of
-        "/" ->
-            split_directory(Directory);
-        _ ->
-            current_directory_list(State) ++ split_directory(Directory)
-    end,
+               $/ ->
+                   [[]] ++ split_directory(Directory);
+               _ ->
+                   current_directory_list(State) ++ split_directory(Directory)
+           end,
     resolve_path(State, Path).
 
 resolve_path(State, Path) ->
     resolve_path(State, Path, []).
 
+resolve_path(State, [], []) ->
+    [[]]; % back to the root
 resolve_path(State, [], R) ->
     R;
 resolve_path(State, [H|T], R) ->
@@ -105,7 +114,6 @@ resolve_path(State, [H|T], R) ->
         P ->
             resolve_path(State, T, R ++ [P])
     end.
-            
 
 set_module_state(State, ModState) ->
     State#connection_state{module_state=ModState}.
@@ -120,10 +128,16 @@ current_directory_list(State) ->
     ModState#msrv_state.current_dir.
 
 initialize_state(State) ->
-    State#connection_state{module_state=#msrv_state{current_dir=[""]}}.
+    State#connection_state{module_state=#msrv_state{current_dir=[[]]}}.
+
+fetch_parent(Root, [[]]) ->
+    Root;
+fetch_parent(Root, Path) ->
+    [_ | T] = lists:reverse(Path),
+    fetch_path(Root, lists:reverse(T)).
 
 fetch_path(F, []) ->
-    fetch_path(F, [""]);
+    F;
 fetch_path(F, [[] | T]) ->
     fetch_path(F, T);
 fetch_path({file, _, _}, [_ | _]) ->
@@ -147,7 +161,7 @@ new_directory(Name) ->
     {dir, dict:new(), #file_info{name=Name, 
                                  mtime=erlang:localtime(),
                                  type=dir,
-                                 mode=777,
+                                 mode=511, % 0777
                                  gid=0,
                                  uid=0,
                                  size=0}}.

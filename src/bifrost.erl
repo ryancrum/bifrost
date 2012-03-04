@@ -75,8 +75,8 @@ init([HookModule]) ->
 %%          {stop, Reason, State}            (terminate/2 is called)
 %%--------------------------------------------------------------------
 handle_call(Request, From, State) ->
-Reply = ok,
-{reply, Reply, State}.
+    Reply = ok,
+    {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: handle_cast/2
@@ -86,7 +86,7 @@ Reply = ok,
 %%          {stop, Reason, State}            (terminate/2 is called)
 %%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-{noreply, State}.
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: handle_info/2
@@ -96,7 +96,7 @@ handle_cast(Msg, State) ->
 %%          {stop, Reason, State}            (terminate/2 is called)
 %%--------------------------------------------------------------------
 handle_info(Info, State) ->
-{noreply, State}.
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: terminate/2
@@ -112,7 +112,7 @@ terminate(Reason, State) ->
 %% Returns: {ok, NewState}
 %%--------------------------------------------------------------------
 code_change(OldVsn, State, Extra) ->
-{ok, State}.
+    {ok, State}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -158,12 +158,41 @@ control_loop(SrvPid, Socket, State) ->
             io:format("DONE BRO~n")
     end.
 
+respond(Socket, ResponseCode) ->
+    respond(Socket, ResponseCode, response_code_string(ResponseCode)).
+
+respond(Socket, ResponseCode, Message) ->
+    gen_tcp:send(Socket, 
+                 integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n").
+
+data_connection(ControlSocket, State) ->
+    respond(ControlSocket, 150),
+    {Addr, Port} = State#connection_state.data_port,
+    case gen_tcp:connect(Addr, Port, [{active, false}, binary]) of
+        {ok, DataSocket} ->
+            DataSocket;
+        {error, Error} ->
+            respond(ControlSocket, 425, "Can't open data connection"),
+            throw(failed)
+    end.
+
+%% FTP COMMANDS
+
 ftp_command(Socket, _, quit, _) ->
     respond(Socket, 200, "Goodbye."),
     quit;
 ftp_command(Socket, State, user, Arg) ->
     respond(Socket, 331),
     {ok, State#connection_state{user_name=Arg}};
+ftp_command(Socket, State, port, Arg) ->
+    case parse_address(Arg) of
+        {ok, {Addr, Port} = AddrPort} ->
+            respond(Socket, 200),
+            io:format("Data port set to ~p~n", [AddrPort]),
+            {ok, State#connection_state{data_port = AddrPort}};
+         _ ->
+            respond(Socket, 452, "Error parsing address.")
+        end;
 ftp_command(Socket, State, pass, Arg) ->
     Mod = State#connection_state.module,
     case Mod:login(State, State#connection_state.user_name, Arg) of
@@ -187,7 +216,7 @@ ftp_command(Socket, State, cwd, Arg) ->
     Mod = State#connection_state.module,
     case Mod:change_directory(State, Arg) of
         {ok, NewState} ->
-            respond(Socket, 250, "directory changed to \"" ++ Arg ++ "\""),
+            respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
             {ok, NewState};
         {error, _} ->
             respond(Socket, 450, "Unable to change directory"),
@@ -202,11 +231,23 @@ ftp_command(Socket, State, mkd, Arg) ->
         {error, _} ->
             respond(Socket, 450, "Unable to create directory"),
             {ok, State}
-    end;    
-ftp_command(Socket, State, _, _) ->
+    end;
+ftp_command(Socket, State, list, Arg) ->
+    Mod = State#connection_state.module,
+    DataSocket = data_connection(Socket, State),
+    case Mod:list_files(State, Arg) of
+        not_found ->
+            respond(Socket, 451);
+        Files ->
+            list_files_to_socket(DataSocket, Files),
+            respond(Socket, 226),
+            gen_tcp:close(DataSocket),
+            {ok, State}
+    end;
+ftp_command(Socket, State, Command, _) ->
+    io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
     {ok, State}.
-
 
 strip_newlines(S) ->
     lists:foldr(fun(C, A) ->
@@ -220,16 +261,18 @@ parse_input(Input) ->
                                  Tokens),
     {list_to_atom(string:to_lower(Command)), string:join(Args, " ")}.
 
-respond(Socket, ResponseCode) ->
-    respond(Socket, ResponseCode, response_code_string(ResponseCode)).
-
-respond(Socket, ResponseCode, Message) ->
-    gen_tcp:send(Socket, 
-                 integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n").
-
-
-
-%% FTP code strings (shamelessly/fully yanked from jungerl/ftpd.erl)
+list_files_to_socket(DataSocket, Files) ->
+    io:format("Listing files ~p~n", [Files]),
+    lists:map(fun(Info) -> 
+                      gen_tcp:send(DataSocket, 
+                                   file_info_to_string(Info) ++ "\r\n") end,
+              Files),
+    io:format("Done listing~n"),
+    ok.
+%% OUTPUT FORMATTING
+%% Most of this code has been shamelessly/fully 
+%% yanked from jungerl/ftpd.erl
+%% FTP code strings 
 response_code_string(110) -> "MARK yyyy = mmmm";             %% ARGS
 response_code_string(120) -> "Service ready in nnn minutes.";  %% ARG
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
@@ -279,7 +322,8 @@ file_info_to_string(Info) ->
         format_number(Info#file_info.uid,5,$ ) ++ " " ++
         format_number(Info#file_info.gid,5,$ ) ++ " "  ++
         format_number(Info#file_info.size,8,$ ) ++ " " ++
-        format_date(Info#file_info.mtime) ++ " ".
+        format_date(Info#file_info.mtime) ++ " " ++
+        Info#file_info.name.
 
 format_date({Date, Time}) ->
     {Year, Month, Day} = Date,
@@ -341,3 +385,28 @@ month(9) -> "Sep";
 month(10) -> "Oct";
 month(11) -> "Nov";
 month(12) -> "Dec".
+
+%% parse address on form:
+%% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
+%% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
+%%
+parse_address(Str) ->
+    paddr(Str, 0, []).
+
+paddr([X|Xs],N,Acc) when X >= $0, X =< $9 -> paddr(Xs, N*10+(X-$0), Acc);
+paddr([X|Xs],_N,Acc) when X >= $A, X =< $F -> paddr(Xs,(X-$A)+10, Acc);
+paddr([X|Xs],_N,Acc) when X >= $a, X =< $f -> paddr(Xs, (X-$a)+10, Acc);
+paddr([$,,$,|_Xs], _N, _Acc) -> error;
+paddr([$,|Xs], N, Acc) -> paddr(Xs, 0, [N|Acc]);
+paddr([],P2,[P1,D4,D3,D2,D1]) -> {ok,{{D1,D2,D3,D4}, P1*256+P2}};
+paddr([],P2,[P1|As]) when length(As) == 32 ->
+    case addr6(As,[]) of
+        {ok,Addr} -> {ok, {Addr, P1*256+P2}};
+        error -> error
+    end;
+paddr(_, _, _) -> error.
+
+addr6([H4,H3,H2,H1|Addr],Acc) when H4<16,H3<16,H2<16,H1<16 ->
+    addr6(Addr, [H4 + H3*16 + H2*256 + H1*4096 |Acc]);
+addr6([], Acc) -> {ok, list_to_tuple(Acc)};
+addr6(_, _) -> error.
