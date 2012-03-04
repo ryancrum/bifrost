@@ -2,7 +2,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2]).
+-export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2, put_file/4, get_file/2]).
 
 -define(debug, true).
 -ifdef(debug).
@@ -117,6 +117,60 @@ list_files(State, Directory) ->
             [Info];
         _ ->
             {error, State}
+    end.
+
+% mode could be append or write, but we're only supporting
+% write.
+% FileRetrievalFun is fun(ByteCount) and retrieves ByteCount bytes
+%  and returns {ok, Bytes, Count} or done
+put_file(State, ProvidedFileName, Mode, FileRetrievalFun) ->
+    FileName = lists:last(string:tokens(ProvidedFileName, "/")),
+    Target = absolute_path(State, FileName),
+    ModState = get_module_state(State),
+    Fs = get_fs(ModState),
+    io:format("ABOUT TO READ SOMETHING~n"),
+    {ok, FileBytes, FileSize} = read_from_fun(FileRetrievalFun),
+    io:format("READ ~p BYTES~n", [FileSize]),
+    NewFs= set_path(Fs, Target, {file, 
+                                 FileBytes,
+                                 new_file_info(FileName, file, FileSize)}),
+    NewModState = ModState#msrv_state{fs=NewFs},
+    {ok, set_module_state(State, NewModState)}.
+
+get_file(State, Path) ->
+    Target = absolute_path(State, Path),
+    ModState = get_module_state(State),
+    Fs = get_fs(ModState),
+    case fetch_path(Fs, Target) of
+        {file, Contents, _} ->
+            {ok, reading_fun(Contents)};
+        _ ->
+            error
+    end.
+
+read_from_fun(Fun) ->
+    read_from_fun([], 0, Fun).
+read_from_fun(Buffer, Count, Fun) ->
+    case Fun(1024) of
+        {ok, Bytes, ReadCount} ->
+            read_from_fun(Buffer ++ binary:bin_to_list(Bytes), Count + ReadCount, Fun);
+        done ->
+            io:format("DONE!"),
+            {ok, Buffer, Count}
+    end.
+
+reading_fun(Bytes) ->
+    reading_fun(1, Bytes).
+reading_fun(Pos, Bytes) ->
+    TotalSize = length(Bytes),
+    fun(ByteCount) ->
+            Window = list_to_binary(lists:sublist(Bytes, Pos, ByteCount)),
+            ReadCount = size(Window),
+            if Pos >= TotalSize ->
+                    done;
+               true ->
+                    {ok, Window, reading_fun(Pos + ReadCount, Bytes)}
+            end
     end.
 
 %% priv

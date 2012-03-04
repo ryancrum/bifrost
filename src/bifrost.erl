@@ -18,7 +18,7 @@
 %% External exports
 -export([start_link/1, start_link/0]).
 -export([establish_control_connection/3]).
--export([await_connections/2]).
+-export([await_connections/2, init_sync/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -65,6 +65,15 @@ init([HookModule]) ->
             {stop, Error}
     end.
 
+init_sync(HookModule) ->
+    case listen_socket(5000, []) of
+        {ok, Listen} ->
+            await_connections_sync(Listen, HookModule),
+            {ok, done};
+        {error, Error} ->
+            {stop, Error}
+    end.
+    
 %%--------------------------------------------------------------------
 %% Function: handle_call/3
 %% Description: Handling call messages
@@ -121,6 +130,13 @@ code_change(OldVsn, State, Extra) ->
 
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
+
+await_connections_sync(Listen, Mod) ->
+    establish_control_connection(self(), Listen, Mod),
+    receive
+        {accepted, ChildPid} -> await_connections(Listen, Mod);
+        Error -> await_connections(Listen, Mod)
+    end.
 
 await_connections(Listen, Mod) ->
     proc_lib:spawn_link(?MODULE,
@@ -272,11 +288,50 @@ ftp_command(Socket, State, dele, Arg) ->
             respond(Socket, 450),
             {ok, State}
         end;
+
+ftp_command(Socket, State, stor, Arg) ->
+    Mod = State#connection_state.module,
+    DataSocket = data_connection(Socket, State),
+    Fun = fun(Size) ->
+                  case gen_tcp:recv(DataSocket, 0) of
+                      {ok, Data} ->
+                          {ok, Data, size(Data)};
+                      {error, closed} ->
+                          done
+                  end
+          end,
+    {ok, NewState} = Mod:put_file(State, Arg, write, Fun),
+    respond(Socket, 226),
+    gen_tcp:close(DataSocket),
+    {ok, NewState};
+
+ftp_command(Socket, State, retr, Arg) ->
+    Mod = State#connection_state.module,
+    DataSocket = data_connection(Socket, State),
+    case Mod:get_file(State, Arg) of
+        {ok, Fun} ->
+            write_fun(DataSocket, Fun),
+            respond(Socket, 226);
+        error ->
+            respond(Socket, 550)            
+    end,
+    gen_tcp:close(DataSocket),
+    {ok, State};
     
 ftp_command(Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
     {ok, State}.
+
+write_fun(Socket, Fun) ->
+    case Fun(1024) of 
+        {ok, Bytes, NextFun} ->
+            io:format("GOT ~p~n", [Bytes]),
+            gen_tcp:send(Socket, Bytes),
+            write_fun(Socket, NextFun);
+        done ->
+            ok
+    end.
 
 strip_newlines(S) ->
     lists:foldr(fun(C, A) ->
