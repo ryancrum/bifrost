@@ -195,13 +195,17 @@ data_connection(ControlSocket, State) ->
 
 %% FTP COMMANDS
 
-ftp_command(Socket, _, quit, _) ->
+ftp_command(Socket, State, Command, Arg) ->
+    Mod = State#connection_state.module,
+    ftp_command(Mod, Socket, State, Command, Arg).
+
+ftp_command(_, Socket, _, quit, _) ->
     respond(Socket, 200, "Goodbye."),
     quit;
-ftp_command(Socket, State, user, Arg) ->
+ftp_command(_, Socket, State, user, Arg) ->
     respond(Socket, 331),
     {ok, State#connection_state{user_name=Arg}};
-ftp_command(Socket, State, port, Arg) ->
+ftp_command(_, Socket, State, port, Arg) ->
     case parse_address(Arg) of
         {ok, {Addr, Port} = AddrPort} ->
             respond(Socket, 200),
@@ -210,8 +214,7 @@ ftp_command(Socket, State, port, Arg) ->
          _ ->
             respond(Socket, 452, "Error parsing address.")
         end;
-ftp_command(Socket, State, pass, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, pass, Arg) ->
     case Mod:login(State, State#connection_state.user_name, Arg) of
         {true, NewState} -> 
             respond(Socket, 230), 
@@ -222,17 +225,15 @@ ftp_command(Socket, State, pass, Arg) ->
      end;
 
 %% from this point on every command requires authentication
-ftp_command(Socket, State=#connection_state{authenticated_state=unauthenticated}, Command, _) ->
+ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, Command, _) ->
     respond(Socket, 530),
     {ok, State};
 
-ftp_command(Socket, State, pwd, _) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, pwd, _) ->
     respond(Socket, 257, Mod:current_directory(State)),
     {ok, State};
 
-ftp_command(Socket, State, cwd, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, cwd, Arg) ->
     case Mod:change_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
@@ -242,8 +243,7 @@ ftp_command(Socket, State, cwd, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Socket, State, mkd, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, mkd, Arg) ->
     case Mod:make_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
@@ -253,8 +253,7 @@ ftp_command(Socket, State, mkd, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Socket, State, list, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, list, Arg) ->
     DataSocket = data_connection(Socket, State),
     case Mod:list_files(State, Arg) of
         not_found ->
@@ -266,8 +265,7 @@ ftp_command(Socket, State, list, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Socket, State, rmd, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, rmd, Arg) ->
     case Mod:remove_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 200),
@@ -278,8 +276,7 @@ ftp_command(Socket, State, rmd, Arg) ->
         end;
 
 
-ftp_command(Socket, State, dele, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, dele, Arg) ->
     case Mod:remove_file(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 200),
@@ -289,8 +286,7 @@ ftp_command(Socket, State, dele, Arg) ->
             {ok, State}
         end;
 
-ftp_command(Socket, State, stor, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, stor, Arg) ->
     DataSocket = data_connection(Socket, State),
     Fun = fun(Size) ->
                   case gen_tcp:recv(DataSocket, 0) of
@@ -305,8 +301,7 @@ ftp_command(Socket, State, stor, Arg) ->
     gen_tcp:close(DataSocket),
     {ok, NewState};
 
-ftp_command(Socket, State, retr, Arg) ->
-    Mod = State#connection_state.module,
+ftp_command(Mod, Socket, State, retr, Arg) ->
     DataSocket = data_connection(Socket, State),
     case Mod:get_file(State, Arg) of
         {ok, Fun} ->
@@ -318,7 +313,7 @@ ftp_command(Socket, State, retr, Arg) ->
     gen_tcp:close(DataSocket),
     {ok, State};
     
-ftp_command(Socket, State, Command, _) ->
+ftp_command(Mod, Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
     {ok, State}.
