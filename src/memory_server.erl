@@ -4,7 +4,6 @@
 
 -export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2, put_file/4, get_file/2]).
 
--define(debug, true).
 -ifdef(debug).
 -compile(export_all).
 -endif.
