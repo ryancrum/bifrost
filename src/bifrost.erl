@@ -486,4 +486,5 @@ format_number_test() ->
     "005" = format_number(5, 3, $0),
     "500" = format_number(500, 2, $0),
     "500" = format_number(500, 3, $0).
+
 -endif.
