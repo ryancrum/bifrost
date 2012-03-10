@@ -290,6 +290,7 @@ set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
     end.
 
 %% Tests
+-ifdef(TEST).
 wrap_fs(Fs) ->
     #connection_state{module_state=#msrv_state{fs=Fs}}.
 
@@ -297,8 +298,6 @@ create_fs() ->
     new_directory("").
 
 new_file_info_test() ->
-    % TODO: need to mock erlang:localtime instead of relying
-    % on the speed of the computer
     FileInfo = #file_info{name="Test",
                           mtime=erlang:localtime(),
                           type=file,
@@ -309,8 +308,6 @@ new_file_info_test() ->
     FileInfo = new_file_info("Test", file, 20).
 
 new_directory_test() ->
-    % TODO: need to mock erlang:localtime instead of relying
-    % on the speed of the computer
     EmptyDictionary = dict:new(),
     NewFileInfo = new_file_info("Test", dir, 0),
     {dir, EmptyDictionary, NewFileInfo} = new_directory("Test").
@@ -355,3 +352,4 @@ remove_directory_test() ->
     {error, not_directory} = remove_directory(StateWithFile, "/testing/123/cheese"),
     {error, not_empty} = remove_directory(StateWithFile, "/testing/123").
 
+-endif.

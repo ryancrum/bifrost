@@ -163,6 +163,9 @@ ftp_command(Mod, Socket, State, pwd, _) ->
     respond(Socket, 257, Mod:current_directory(State)),
     {ok, State};
 
+ftp_command(Mod, Socket, State, cdup, Arg) ->
+    ftp_command(Mod, Socket, State, cwd, "..");
+
 ftp_command(Mod, Socket, State, cwd, Arg) ->
     case Mod:change_directory(State, Arg) of
         {ok, NewState} ->
@@ -180,6 +183,18 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
             {ok, NewState};
         {error, _} ->
             respond(Socket, 450, "Unable to create directory"),
+            {ok, State}
+    end;
+
+ftp_command(Mod, Socket, State, nlst, Arg) ->
+    DataSocket = data_connection(Socket, State),
+    case Mod:list_files(State, Arg) of
+        not_found ->
+            respond(Socket, 451);
+        Files ->
+            list_file_names_to_socket(DataSocket, Files),
+            respond(Socket, 226),
+            gen_tcp:close(DataSocket),
             {ok, State}
     end;
 
@@ -205,6 +220,9 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             {ok, State}
         end;
 
+ftp_command(Mod, Socket, State, syst, _) ->
+    respond(Socket, 215, "UNIX Type: L8"),
+    {ok, State};
 
 ftp_command(Mod, Socket, State, dele, Arg) ->
     case Mod:remove_file(State, Arg) of
@@ -242,6 +260,22 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
     end,
     gen_tcp:close(DataSocket),
     {ok, State};
+
+ftp_command(Mod, Socket, State, xcwd, Arg) ->
+    ftp_command(Mod, Socket, State, cwd, Arg);
+
+ftp_command(Mod, Socket, State, xcup, Arg) ->
+    ftp_command(Mod, Socket, State, cdup, Arg);
+    
+ftp_command(Mod, Socket, State, xmkd, Arg) ->
+    ftp_command(Mod, Socket, State, mkd, Arg);
+
+ftp_command(Mod, Socket, State, xpwd, Arg) ->
+    ftp_command(Mod, Socket, State, pwd, Arg);
+
+ftp_command(Mod, Socket, State, xrmd, Arg) ->
+    ftp_command(Mod, Socket, State, rmd, Arg);
+
     
 ftp_command(Mod, Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
@@ -275,6 +309,15 @@ list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) -> 
                       gen_tcp:send(DataSocket, 
                                    file_info_to_string(Info) ++ "\r\n") end,
+              Files),
+    io:format("Done listing~n"),
+    ok.
+
+list_file_names_to_socket(DataSocket, Files) ->
+    io:format("Listing files ~p~n", [Files]),
+    lists:map(fun(Info) -> 
+                      gen_tcp:send(DataSocket, 
+                                   Info#file_info.name ++ "\r\n") end,
               Files),
     io:format("Done listing~n"),
     ok.
@@ -422,6 +465,8 @@ addr6([], Acc) -> {ok, list_to_tuple(Acc)};
 addr6(_, _) -> error.
 
 % TESTS
+-ifdef(TEST).
+
 strip_newlines_test() ->
     "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
     "testing again" = strip_newlines("testing again").
@@ -441,4 +486,4 @@ format_number_test() ->
     "005" = format_number(5, 3, $0),
     "500" = format_number(500, 2, $0),
     "500" = format_number(500, 3, $0).
-
+-endif.
