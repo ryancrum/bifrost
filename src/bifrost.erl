@@ -5,7 +5,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/1, start_link/0, init_sync/1]).
+-export([start_link/1, start_link/0, init_sync/1, establish_control_connection/3, await_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -282,7 +282,6 @@ ftp_command(Mod, Socket, State, Command, _) ->
 write_fun(Socket, Fun) ->
     case Fun(1024) of 
         {ok, Bytes, NextFun} ->
-            io:format("GOT ~p~n", [Bytes]),
             gen_tcp:send(Socket, Bytes),
             write_fun(Socket, NextFun);
         done ->
