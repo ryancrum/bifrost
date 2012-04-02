@@ -588,4 +588,33 @@ authenticate_failure_test() ->
     meck:unload(memory_server),
     meck:unload(gen_tcp).
 
+mkdir_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "250 \"test_dir\" directory created.\r\n"),
+                      Myself ! {tcp, socket, "MKD test_dir"},
+                      receive
+                          {new_state, _, _} -> ok
+                      end,
+                      meck:expect(memory_server,
+                                  make_directory,
+                                  fun(_, _) -> 
+                                          {error, error} 
+                                  end),
+                      mock_socket_response(socket, "450 Unable to create directory\r\n"),
+                      Myself ! {tcp, socket, "MKD test_dir_2"},
+                      receive
+                          {new_state, _, _} -> ok
+                      end,
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
+
 -endif.
