@@ -63,10 +63,7 @@ listen_socket(Port, TcpOpts) ->
 
 await_connections_sync(Listen, Mod) ->
     establish_control_connection(self(), Listen, Mod),
-    receive
-        {accepted, ChildPid} -> await_connections(Listen, Mod);
-        Error -> await_connections(Listen, Mod)
-    end.
+    await_connections_sync(Listen, Mod).
 
 await_connections(Listen, Mod) ->
     proc_lib:spawn_link(?MODULE,
