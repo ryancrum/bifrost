@@ -184,11 +184,12 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
     end;
 
 ftp_command(Mod, Socket, State, nlst, Arg) ->
-    DataSocket = data_connection(Socket, State),
     case Mod:list_files(State, Arg) of
-        not_found ->
-            respond(Socket, 451);
+        {error, NewState} ->
+            respond(Socket, 451),
+            {ok, NewState};
         Files ->
+            DataSocket = data_connection(Socket, State),
             list_file_names_to_socket(DataSocket, Files),
             respond(Socket, 226),
             gen_tcp:close(DataSocket),
@@ -196,11 +197,12 @@ ftp_command(Mod, Socket, State, nlst, Arg) ->
     end;
 
 ftp_command(Mod, Socket, State, list, Arg) ->
-    DataSocket = data_connection(Socket, State),
     case Mod:list_files(State, Arg) of
-        not_found ->
-            respond(Socket, 451);
+        {error, _} ->
+            respond(Socket, 451),
+            {ok, State};
         Files ->
+            DataSocket = data_connection(Socket, State),
             list_files_to_socket(DataSocket, Files),
             respond(Socket, 226),
             gen_tcp:close(DataSocket),
