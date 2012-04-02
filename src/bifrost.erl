@@ -246,6 +246,15 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
     gen_tcp:close(DataSocket),
     {ok, NewState};
 
+ftp_command(_, Socket, State, type, Arg) ->
+    case Arg of
+        "I" ->
+            respond(Socket, 200);
+        _ ->
+            respond(Socket, 501, "Only TYPE I may be used.")
+    end,
+    {ok, State};
+
 ftp_command(Mod, Socket, State, retr, Arg) ->
     DataSocket = data_connection(Socket, State),
     case Mod:get_file(State, Arg) of
@@ -327,12 +336,12 @@ response_code_string(120) -> "Service ready in nnn minutes.";  %% ARG
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
 response_code_string(150) -> "File status okay; about to open data connection.";
 response_code_string(200) -> "Command okay.";
-response_code_string(202) -> "Command not implemented, superfluos at this site.";
+response_code_string(202) -> "Command not implemented, superfluous at this site.";
 response_code_string(211) -> "System status, or system help reply.";
 response_code_string(212) -> "Directory status.";
 response_code_string(213) -> "File status.";
 response_code_string(214) -> "Help message.";     %% ADD HELP
-response_code_string(215) -> "NAME system type";  %% set NAME
+response_code_string(215) -> "UNIX system type";  %% set NAME
 response_code_string(220) -> "Service ready for user.";
 response_code_string(221) -> "Service closing control connection.";
 response_code_string(225) -> "Data connection open; no transfere in progress";    
@@ -350,7 +359,7 @@ response_code_string(426) -> "Connection closed; transfere aborted.";
 response_code_string(450) -> "Requested file action not taken.";
 response_code_string(451) -> "Requested action not taken: local error in processing.";
 response_code_string(452) -> "Requested action not taken.";
-response_code_string(500) -> "Syntax error, command unrecognized.";  %% ADD INFO
+response_code_string(500) -> "Syntax error, command unrecognized.";
 response_code_string(501) -> "Syntax error in parameters or arguments.";
 response_code_string(502) -> "Command not implemented.";
 response_code_string(503) -> "Bad sequence of commands.";
