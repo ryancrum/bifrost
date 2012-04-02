@@ -494,4 +494,8 @@ format_number_test() ->
     "500" = format_number(500, 2, $0),
     "500" = format_number(500, 3, $0).
 
+parse_address_test() ->
+    {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
+    error = parse_address("MEAT MEAT").
+
 -endif.
