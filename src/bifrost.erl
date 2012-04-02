@@ -79,24 +79,30 @@ establish_control_connection(SrvPid, Listen, Mod) ->
         {ok, Socket} ->
             SrvPid ! {accepted, self()},
             respond(Socket, 220, "FTP Server Ready"),
-            control_loop(SrvPid, Socket, #connection_state{module=Mod});
+            control_loop(SrvPid, none, Socket, #connection_state{module=Mod});
         _Error ->
             exit(bad_accept)
     end.
 
-control_loop(SrvPid, Socket, State) ->
+control_loop(SrvPid, HookPid, Socket, State) ->
     receive
         {tcp, Socket, Input} ->
             {Command, Arg} = parse_input(Input),
             case ftp_command(Socket, State, Command, Arg) of
                 {ok, NewState} ->
-                    control_loop(SrvPid, Socket, NewState);
+                    if is_pid(HookPid) ->
+                            HookPid ! {new_state, self(), NewState};
+                       true ->
+                            ok
+                    end,
+                    control_loop(SrvPid, HookPid, Socket, NewState);
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
-                    true;
+                    {error, timeout};
                 {error, closed} ->
-                    true;
-                quit -> true
+                    {error, closed};
+                quit ->
+                    {ok, quit}
             end;
         {tcp_closed, Socket} ->
             io:format("DONE BRO~n")
@@ -497,5 +503,84 @@ format_number_test() ->
 parse_address_test() ->
     {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
     error = parse_address("MEAT MEAT").
+
+control_connection_establishment_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:expect(gen_tcp, accept, fun(some_socket) -> {ok, another_socket} end),
+    meck:expect(gen_tcp, send, fun(another_socket, "220 FTP Server Ready\r\n") -> ok end),
+    Myself = self(),
+    Child = spawn_link(fun() ->
+                               establish_control_connection(Myself, some_socket, memory_server)
+                       end),
+    receive
+        {accepted, Child} ->
+            ok
+    end,
+    Child ! {tcp_closed, another_socket},
+    meck:validate(gen_tcp),
+    meck:unload(gen_tcp).
+
+authenticate_successful_test() ->
+    meck:new(gen_tcp, [unstick]),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      meck:expect(gen_tcp, 
+                                  send, 
+                                  fun(socket, "331 User name okay, need password.\r\n") -> ok end),
+                      Myself ! {tcp, socket, "USER meat"},
+                      receive
+                          {new_state, _, #connection_state{user_name="meat"}} ->
+                              ok
+                      end,
+                      
+                      meck:expect(gen_tcp, 
+                                  send, 
+                                  fun(socket, "230 User logged in, proceed.\r\n") -> ok end),
+                      Myself ! {tcp, socket, "PASS meatmeat"},
+                      receive
+                          {new_state, _, #connection_state{authenticated_state=authenticated}} ->
+                              ok
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(gen_tcp).
+
+authenticate_failure_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    meck:expect(memory_server, 
+                login, 
+                fun(_, "meat", "meatmeat") ->
+                        {error}
+                end),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      meck:expect(gen_tcp,
+                                  send, 
+                                  fun(socket, "331 User name okay, need password.\r\n") -> ok end),
+                      Myself ! {tcp, socket, "USER meat"},
+                      receive
+                          {new_state, _, #connection_state{user_name="meat"}} ->
+                              ok
+                      end,
+
+                      meck:expect(gen_tcp, 
+                                  send, 
+                                  fun(socket, "530 Login incorrect.\r\n") -> ok end),
+                      Myself ! {tcp, socket, "PASS meatmeat"},
+                      receive
+                          {new_state, _, #connection_state{authenticated_state=authenticated}} ->
+                              ok
+                      end
+              end),
+    {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
 
 -endif.
