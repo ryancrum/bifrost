@@ -166,7 +166,7 @@ ftp_command(Mod, Socket, State, pwd, _) ->
     respond(Socket, 257, Mod:current_directory(State)),
     {ok, State};
 
-ftp_command(Mod, Socket, State, cdup, Arg) ->
+ftp_command(Mod, Socket, State, cdup, _) ->
     ftp_command(Mod, Socket, State, cwd, "..");
 
 ftp_command(Mod, Socket, State, cwd, Arg) ->
@@ -531,7 +531,13 @@ control_connection_establishment_test() ->
     meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
+authenticate_state(State) ->
+    State#connection_state{authenticated_state=authenticated}.
+
 login_test_user(SocketPid) ->
+    login_test_user(SocketPid, pass).
+
+login_test_user(SocketPid, InitialState) ->
     mock_socket_response(socket, "331 User name okay, need password.\r\n"),
     SocketPid ! {tcp, socket, "USER meat"},
     receive
@@ -543,7 +549,12 @@ login_test_user(SocketPid) ->
     meck:expect(memory_server, 
                 login, 
                 fun(St, "meat", "meatmeat") ->
-                        {true, St}
+                        case InitialState of
+                            pass ->
+                                {true, authenticate_state(St)};
+                            _ ->
+                                {true, authenticate_state(InitialState)}
+                        end
                 end),
     SocketPid ! {tcp, socket, "PASS meatmeat"},
     receive
@@ -586,13 +597,36 @@ authenticate_failure_test() ->
                       mock_socket_response(socket, "530 Login incorrect.\r\n"),
                       Myself ! {tcp, socket, "PASS meatmeat"},
                       receive
-                          {new_state, _, #connection_state{authenticated_state=authenticated}} ->
+                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
                               ok
                       end
               end),
     {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
+    meck:unload(gen_tcp).
+
+unauthenticated_test() ->
+    meck:new(gen_tcp, [unstick]),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      mock_socket_response(socket, "530 Not logged in.\r\n"),
+                      Myself ! {tcp, socket, "CWD /hamster"},
+                      receive
+                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
+                              ok
+                      end,
+
+                      Myself ! {tcp, socket, "MKD /unicorns"},
+                      receive
+                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
+                              ok
+                      end,
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
 mkdir_test() ->
@@ -612,6 +646,7 @@ mkdir_test() ->
                       receive
                           {new_state, _, _} -> ok
                       end,
+
                       meck:expect(memory_server,
                                   make_directory,
                                   fun(_, _) -> 
@@ -629,4 +664,103 @@ mkdir_test() ->
     meck:unload(memory_server),
     meck:unload(gen_tcp).
 
+% TODO: impure test
+cwd_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    InitialState = memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]),
+
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself, InitialState),
+                      mock_socket_response(socket, 
+                                           "250 directory changed to \"/meat/bovine/bison\"\r\n"),
+                      Myself ! {tcp, socket, "CWD /meat/bovine/bison"},
+                      receive
+                          {new_state, _, _} -> ok
+                      end,
+
+                      mock_socket_response(socket, 
+                                           "450 Unable to change directory\r\n"),
+                      Myself ! {tcp, socket, "CWD /meat/bovine/auroch"},
+                      receive
+                          {new_state, _, _} -> ok
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
+
+% TODO: impure test
+cdup_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    {ok, InitialState} = memory_server:change_directory(memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]), 
+                                                        "/meat/bovine"),
+
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself, InitialState),
+                      mock_socket_response(socket, 
+                                           "250 directory changed to \"/meat\"\r\n"),
+                      Myself ! {tcp, socket, "CDUP"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+
+                      mock_socket_response(socket, 
+                                           "250 directory changed to \"/\"\r\n"),
+                      Myself ! {tcp, socket, "CDUP"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+
+                      mock_socket_response(socket, 
+                                           "250 directory changed to \"/\"\r\n"),
+                      Myself ! {tcp, socket, "CDUP"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
+    
+pwd_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      meck:expect(memory_server,
+                                  current_directory,
+                                  fun(_) -> "/meat/bovine/bison" end),
+
+                      mock_socket_response(socket, 
+                                           "257 /meat/bovine/bison\r\n"),
+                      Myself ! {tcp, socket, "PWD"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
+    
 -endif.

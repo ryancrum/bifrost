@@ -8,6 +8,10 @@
 -compile(export_all).
 -endif.
 
+-ifdef(TEST).
+-export([fs_with_paths/1, fs_with_paths/2, add_file/3]).
+-endif.
+
 -record(msrv_state, 
         {
           current_dir = [[]],
@@ -291,8 +295,26 @@ set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
 
 %% Tests
 -ifdef(TEST).
+
+fs_with_paths([], State) ->
+    State;
+fs_with_paths([Path | Paths], State) ->
+    {ok, NewState} = make_directory(State, Path),
+    fs_with_paths(Paths, NewState).
+
+fs_with_paths(Paths) ->
+    fs_with_paths(Paths, wrap_fs(create_fs())).
+
+add_file(State, Path, Contents) ->
+    put_file(State, 
+             Path, 
+             image, 
+             fun(_) ->
+                     {ok, Contents, size(Contents)}
+             end).
+
 wrap_fs(Fs) ->
-    #connection_state{module_state=#msrv_state{fs=Fs}}.
+    #connection_state{module_state=#msrv_state{fs=Fs}, module=?MODULE}.
 
 create_fs() ->
     new_directory("").
