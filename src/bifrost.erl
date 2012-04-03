@@ -436,7 +436,7 @@ format_number(X, N, LeftPad) when X >= 0 ->
     Len = length(Ls),
     if Len >= N -> Ls;
        true ->
-	    lists:duplicate(N - Len, LeftPad) ++ Ls
+            lists:duplicate(N - Len, LeftPad) ++ Ls
     end.
 
 month(1) -> "Jan";
@@ -516,8 +516,8 @@ parse_address_test() ->
     error = parse_address("MEAT MEAT").
 
 mock_socket_response(S, R) ->
-    meck:expect(gen_tcp, 
-                send, 
+    meck:expect(gen_tcp,
+                send,
                 fun(S2, R2) ->
                         S2 = S,
                         R2 = R,
@@ -555,10 +555,10 @@ login_test_user(SocketPid, InitialState) ->
         {new_state, _, _} ->
             ok
     end,
-    
+
     mock_socket_response(socket, "230 User logged in, proceed.\r\n"),
-    meck:expect(memory_server, 
-                login, 
+    meck:expect(memory_server,
+                login,
                 fun(St, "meat", "meatmeat") ->
                         case InitialState of
                             pass ->
@@ -585,8 +585,8 @@ authenticate_successful_test() ->
 
 authenticate_failure_test() ->
     ?initBifrostTest(),
-    meck:expect(memory_server, 
-                login, 
+    meck:expect(memory_server,
+                login,
                 fun(_, "meat", "meatmeat") ->
                         {error}
                 end),
@@ -645,7 +645,7 @@ mkdir_test() ->
                       mock_socket_response(socket, "250 \"test_dir\" directory created.\r\n"),
                       meck:expect(memory_server,
                                   make_directory,
-                                  fun(State, _) -> 
+                                  fun(State, _) ->
                                           {ok, State}
                                   end),
                       Myself ! {tcp, socket, "MKD test_dir"},
@@ -655,8 +655,8 @@ mkdir_test() ->
 
                       meck:expect(memory_server,
                                   make_directory,
-                                  fun(_, _) -> 
-                                          {error, error} 
+                                  fun(_, _) ->
+                                          {error, error}
                                   end),
                       mock_socket_response(socket, "450 Unable to create directory\r\n"),
                       Myself ! {tcp, socket, "MKD test_dir_2"},
@@ -676,20 +676,20 @@ cwd_test() ->
     Child = spawn_link(
               fun() ->
                       login_test_user(Myself, InitialState),
-                      mock_socket_response(socket, 
+                      mock_socket_response(socket,
                                            "250 directory changed to \"/meat/bovine/bison\"\r\n"),
                       Myself ! {tcp, socket, "CWD /meat/bovine/bison"},
                       receive
                           {new_state, _, _} -> ok
                       end,
 
-                      mock_socket_response(socket, 
+                      mock_socket_response(socket,
                                            "450 Unable to change directory\r\n"),
                       Myself ! {tcp, socket, "CWD /meat/bovine/auroch"},
                       receive
                           {new_state, _, _} -> ok
                       end,
-                      
+
                       Myself ! {tcp_closed, socket}
               end),
     ?executeBifrostTest(Child).
@@ -712,7 +712,7 @@ cdup_test() ->
                               ok
                       end,
 
-                      mock_socket_response(socket, 
+                      mock_socket_response(socket,
                                            "250 directory changed to \"/\"\r\n"),
                       Myself ! {tcp, socket, "CDUP"},
                       receive
@@ -720,14 +720,14 @@ cdup_test() ->
                               ok
                       end,
 
-                      mock_socket_response(socket, 
+                      mock_socket_response(socket,
                                            "250 directory changed to \"/\"\r\n"),
                       Myself ! {tcp, socket, "CDUP"},
                       receive
                           {new_state, _, _} ->
                               ok
                       end,
-                      
+
                       Myself ! {tcp_closed, socket}
               end),
     ?executeBifrostTest(Child).
@@ -742,7 +742,7 @@ pwd_test() ->
                                   current_directory,
                                   fun(_) -> "/meat/bovine/bison" end),
 
-                      mock_socket_response(socket, 
+                      mock_socket_response(socket,
                                            "257 /meat/bovine/bison\r\n"),
                       Myself ! {tcp, socket, "PWD"},
                       receive
@@ -757,15 +757,15 @@ pwd_test() ->
 test_data_socket(ControlPid) ->
     meck:expect(gen_tcp,
                 connect,
-                fun(_, _, _) -> 
+                fun(_, _, _) ->
                         {ok, data_socket}
                 end),
-    
-    mock_socket_response(socket, 
+
+    mock_socket_response(socket,
                          "200 Command okay.\r\n"),
-    
+
     ControlPid ! {tcp, socket, "PORT 127,0,0,1,7,208"},
-    receive 
+    receive
         {new_state, _, #connection_state{data_port={{127,0,0,1}, 2000}}} ->
             ok
     end.
@@ -799,7 +799,7 @@ nlst_test() ->
                        [data_socket, "edward\r\n"],
                        [data_socket, "Aethelred\r\n"],
                        [socket, "226 Closing data connection.\r\n"]],
-                      
+
                       expect_responses(Responses),
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
@@ -843,7 +843,7 @@ list_test() ->
                        [data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"],
                        [data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"],
                        [socket, "226 Closing data connection.\r\n"]],
-                      
+
                       expect_responses(Responses),
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
@@ -870,13 +870,13 @@ remove_directory_test() ->
                                  fun(St, "/bison/burgers") ->
                                          {ok, St}
                                  end),
-                     
+
                      Myself ! {tcp, socket, "RMD /bison/burgers"},
                      receive
                          {new_state, _, _} ->
                              ok
                      end,
-                     
+
                      Myself ! {tcp_closed, socket}
              end),
     ?executeBifrostTest(Child).
@@ -894,13 +894,13 @@ remove_file_test() ->
                                  fun(St, "cheese.txt") ->
                                          {ok, St}
                                  end),
-                     
+
                      Myself ! {tcp, socket, "DELE cheese.txt"},
                      receive
                          {new_state, _, _} ->
                              ok
                      end,
-                     
+
                      Myself ! {tcp_closed, socket}
              end),
     ?executeBifrostTest(Child).
@@ -973,6 +973,6 @@ retr_test() ->
                      end,
                      Myself ! {tcp_closed, socket}
              end),
-    ?executeBifrostTest(Child).    
+    ?executeBifrostTest(Child).
 
 -endif.
