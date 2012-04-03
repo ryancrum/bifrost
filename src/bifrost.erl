@@ -762,5 +762,116 @@ pwd_test() ->
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
+
+test_data_socket(ControlPid) ->
+    meck:expect(gen_tcp,
+                connect,
+                fun(_, _, _) -> 
+                        {ok, data_socket}
+                end),
+    
+    mock_socket_response(socket, 
+                         "200 Command okay.\r\n"),
+    
+    ControlPid ! {tcp, socket, "PORT 127,0,0,1,7,208"},
+    receive 
+        {new_state, _, #connection_state{data_port={{127,0,0,1}, 2000}}} ->
+            ok
+    end.
+
+expect_responses([]) ->
+    ok;
+expect_responses([[Socket, Content] | Responses]) ->
+    meck:expect(gen_tcp,
+                send,
+                fun(S, C) ->
+                        ?assertEqual(Socket, S),
+                        ?assertEqual(Content, unicode:characters_to_list(C)),
+                        expect_responses(Responses)
+                end).
+
+nlst_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    meck:expect(memory_server,
+                list_files,
+                fun(_, _) ->
+                        [#file_info{type=file, name="edward"},
+                         #file_info{type=dir, name="Aethelred"}]
+                end),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+
+                      test_data_socket(Myself),
+                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
+                       [data_socket, "edward\r\n"],
+                       [data_socket, "Aethelred\r\n"],
+                       [socket, "226 Closing data connection.\r\n"]],
+                      
+                      expect_responses(Responses),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                      Myself ! {tcp, socket, "NLST"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
+
+list_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    meck:expect(memory_server,
+                list_files,
+                fun(_, _) ->
+                        [#file_info{type=file, 
+                                    name="edward",
+                                    mode=511,
+                                    gid=0,
+                                    uid=0,
+                                    mtime={{2012,12,12},{12,12,12}},
+                                    size=512},
+                         #file_info{type=dir, 
+                                    name="Aethelred",
+                                    mode=200,
+                                    gid=0,
+                                    uid=0,
+                                    mtime={{2012,12,12},{12,12,12}},
+                                    size=0}]
+                end),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+
+                      test_data_socket(Myself),
+                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
+                       [data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"],
+                       [data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"],
+                       [socket, "226 Closing data connection.\r\n"]],
+                      
+                      expect_responses(Responses),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                      Myself ! {tcp, socket, "LIST"},
+                      receive
+                          {new_state, _, _} ->
+                              ok
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).    
     
 -endif.
