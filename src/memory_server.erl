@@ -2,7 +2,18 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2, put_file/4, get_file/2, file_info/2]).
+-export([login/3, 
+         init/1, 
+         current_directory/1, 
+         make_directory/2, 
+         change_directory/2, 
+         list_files/2, 
+         remove_directory/2, 
+         remove_file/2, 
+         put_file/4, 
+         get_file/2, 
+         file_info/2,
+         rename_file/3]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -79,6 +90,9 @@ remove_file(State, File) ->
             {error, unknown}
     end.
 
+rename_file(State, FromPath, ToPath) ->
+    {error, not_supported}.
+
 remove_directory(State, Directory) ->
     Target = absolute_path(State, Directory),
     ModState = get_module_state(State),
@@ -131,15 +145,14 @@ put_file(State, ProvidedFileName, Mode, FileRetrievalFun) ->
     Target = absolute_path(State, FileName),
     ModState = get_module_state(State),
     Fs = get_fs(ModState),
-    io:format("ABOUT TO READ SOMETHING~n"),
     {ok, FileBytes, FileSize} = read_from_fun(FileRetrievalFun),
-    io:format("READ ~p BYTES~n", [FileSize]),
     NewFs= set_path(Fs, Target, {file, 
                                  FileBytes,
                                  new_file_info(FileName, file, FileSize)}),
     NewModState = ModState#msrv_state{fs=NewFs},
     {ok, set_module_state(State, NewModState)}.
 
+    
 get_file(State, Path) ->
     Target = absolute_path(State, Path),
     ModState = get_module_state(State),

@@ -315,6 +315,25 @@ ftp_command(Mod, Socket, State, mdtm, Arg) ->
     end,
     {ok, State};
 
+ftp_command(Mod, Socket, State, rnfr, Arg) ->
+    respond(Socket, 350, "Ready for RNTO."),
+    {ok, State#connection_state{rnfr=Arg}};
+
+ftp_command(Mod, Socket, State, rnto, Arg) ->
+    case State#connection_state.rnfr of
+        undefined ->
+            respond(Socket, 503, "RNFR not specified."),
+            {ok, State};
+        Rnfr ->
+            case Mod:rename_file(State, Rnfr, Arg) of
+                {error, Error} ->
+                    respond(Socket, 550);
+                {ok, NewState} ->
+                    respond(Socket, 250, "Rename successful."),
+                    {ok, NewState#connection_state{rnfr=undefined}}
+            end
+    end;
+
 ftp_command(Mod, Socket, State, xcwd, Arg) ->
     ftp_command(Mod, Socket, State, cwd, Arg);
 
@@ -1114,4 +1133,46 @@ mdtm_test() ->
               end),
     ?executeBifrostTest(Child).
 
+rnfr_rnto_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "503 RNFR not specified.\r\n"),
+                      Myself ! {tcp, socket, "RNTO mushrooms.txt"},
+                      receive
+                          {new_state, _, _} -> 
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+                      
+                      mock_socket_response(socket, "350 Ready for RNTO.\r\n"),
+                      meck:expect(memory_server,
+                                  rename_file,
+                                  fun(S, "cheese.txt", "mushrooms.txt") ->
+                                          {ok, S}
+                                  end),
+                      Myself ! {tcp, socket, "RNFR cheese.txt"},
+                      receive
+                          {new_state, _, _} -> 
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      mock_socket_response(socket, "250 Rename successful.\r\n"),
+                      Myself ! {tcp, socket, "RNTO mushrooms.txt"},
+                      receive
+                          {new_state, _, #connection_state{rnfr=undefined}} -> 
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
+    ?executeBifrostTest(Child).
+    
 -endif.
