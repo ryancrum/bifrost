@@ -304,6 +304,17 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
     gen_tcp:close(DataSocket),
     {ok, State};
 
+ftp_command(Mod, Socket, State, mdtm, Arg) ->
+    case Mod:file_info(State, Arg) of
+        {ok, FileInfo} ->
+            respond(Socket, 
+                    213,
+                    format_mdtm_date(FileInfo#file_info.mtime));
+        Error ->
+            respond(Socket, 550)
+    end,
+    {ok, State};
+
 ftp_command(Mod, Socket, State, xcwd, Arg) ->
     ftp_command(Mod, Socket, State, cwd, Arg);
 
@@ -419,6 +430,10 @@ file_info_to_string(Info) ->
         format_number(Info#file_info.size,8,$ ) ++ " " ++
         format_date(Info#file_info.mtime) ++ " " ++
         Info#file_info.name.
+
+format_mdtm_date({{Year, Month, Day}, {Hours, Mins, Secs}}) ->
+    lists:flatten(io_lib:format("~4..0B~2..0B~2..0B~2..0B~2..0B~2..0B",
+                                [Year, Month, Day, Hours, Mins, Secs])).
 
 format_date({Date, Time}) ->
     {Year, Month, Day} = Date,
@@ -1064,6 +1079,32 @@ rein_test() ->
                       Myself ! {tcp, socket, "REIN"},
                       receive
                           {new_state, _, #connection_state{authenticated_state=unauthenticated}} -> 
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
+    ?executeBifrostTest(Child).
+
+mdtm_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "213 20120203160312\r\n"),
+                      meck:expect(memory_server,
+                                  file_info,
+                                  fun(_, "cheese.txt") ->
+                                          {ok,
+                                           #file_info{type=file, 
+                                                      mtime={{2012,2,3},{16,3,12}}}}
+                                  end),
+                      Myself ! {tcp, socket, "MDTM cheese.txt"},
+                      receive
+                          {new_state, _, _} -> 
                               ok;
                           _ ->
                               ?assert(fail)

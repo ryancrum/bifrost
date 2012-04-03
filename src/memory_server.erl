@@ -2,7 +2,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2, put_file/4, get_file/2]).
+-export([login/3, init/1, current_directory/1, make_directory/2, change_directory/2, list_files/2, remove_directory/2, remove_file/2, put_file/4, get_file/2, file_info/2]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -149,6 +149,17 @@ get_file(State, Path) ->
             {ok, reading_fun(Contents)};
         _ ->
             error
+    end.
+
+file_info(State, Path) ->
+    Target = absolute_path(State, Path),
+    ModState = get_module_state(State),
+    Fs = get_fs(ModState),
+    case fetch_path(Fs, Target) of
+        {file, _, Info} ->
+            {ok, Info};
+        _ ->
+            {error, not_found}
     end.
 
 read_from_fun(Fun) ->
