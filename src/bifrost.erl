@@ -881,4 +881,98 @@ remove_directory_test() ->
              end),
     ?executeBifrostTest(Child).
 
+remove_file_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+             fun() -> 
+                     login_test_user(Myself),
+                     mock_socket_response(socket,
+                                          "200 Command okay.\r\n"),
+                     meck:expect(memory_server,
+                                 remove_file,
+                                 fun(St, "cheese.txt") ->
+                                         {ok, St}
+                                 end),
+                     
+                     Myself ! {tcp, socket, "DELE cheese.txt"},
+                     receive
+                         {new_state, _, _} ->
+                             ok
+                     end,
+                     
+                     Myself ! {tcp_closed, socket}
+             end),
+    ?executeBifrostTest(Child).
+
+stor_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+             fun() ->
+                     login_test_user(Myself),
+                     test_data_socket(Myself),
+                     Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
+                                  [socket, "226 Closing data connection.\r\n"]],
+                     expect_responses(Responses),
+                     meck:expect(gen_tcp,
+                                 recv,
+                                 fun(data_socket, 0) ->
+                                         {ok, list_to_binary("SOME DATA HERE")}
+                                 end),
+                     meck:expect(memory_server,
+                                 put_file,
+                                 fun(S, "bologna.txt", write, F) ->
+                                         {ok, Data, DataSize} = F(1024),
+                                         BinData = list_to_binary("SOME DATA HERE"),
+                                         ?assertEqual(Data, BinData),
+                                         ?assertEqual(DataSize, size(BinData)),
+                                         {ok, S}
+                                 end),
+
+                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                     Myself ! {tcp, socket, "STOR bologna.txt"},
+                     receive
+                         {new_state, _, _} -> ok
+                     end,
+                     Myself ! {tcp_closed, socket}
+             end),
+    ?executeBifrostTest(Child).
+
+retr_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+             fun() ->
+                     login_test_user(Myself),
+                     test_data_socket(Myself),
+                     Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
+                                  [data_socket, "SOME DATA HERE"],
+                                  [data_socket, "SOME MORE DATA"],
+                                  [socket, "226 Closing data connection.\r\n"]],
+                     expect_responses(Responses),
+                     meck:expect(memory_server,
+                                 get_file,
+                                 fun(S, "bologna.txt") ->
+                                         {ok, 
+                                          fun(1024) -> 
+                                                  {ok, 
+                                                   list_to_binary("SOME DATA HERE"),
+                                                   fun(1024) -> 
+                                                           {ok, 
+                                                            list_to_binary("SOME MORE DATA"),
+                                                            fun(1024) -> done end}
+                                                   end}
+                                          end}
+                                 end),
+
+                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                     Myself ! {tcp, socket, "RETR bologna.txt"},
+                     receive
+                         {new_state, _, _} -> ok
+                     end,
+                     Myself ! {tcp_closed, socket}
+             end),
+    ?executeBifrostTest(Child).    
+
 -endif.
