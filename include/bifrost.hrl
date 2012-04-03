@@ -4,8 +4,8 @@
           authenticated_state = unauthenticated,
           user_name,
           ip,
-          data_port,
-          pasv_listen,
+          data_port = undefined,
+          pasv_listen = undefined,
           module,
           module_state
          }).

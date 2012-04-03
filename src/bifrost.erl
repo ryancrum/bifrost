@@ -10,12 +10,6 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, 
-        {
-          listen,
-          accept
-         }).
-
 start_link() ->
     start_link(memory_server).
 
@@ -77,6 +71,7 @@ await_connections(Listen, Mod) ->
 establish_control_connection(SrvPid, Listen, Mod) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
+            io:format("CONNECTION ESTABLISHED: ~p~n", [inet:sockname(Socket)]),
             SrvPid ! {accepted, self()},
             respond(Socket, 220, "FTP Server Ready"),
             control_loop(SrvPid, none, Socket, #connection_state{module=Mod});
@@ -88,6 +83,7 @@ control_loop(SrvPid, HookPid, Socket, State) ->
     receive
         {tcp, Socket, Input} ->
             {Command, Arg} = parse_input(Input),
+            io:format("RC: ~p~n", [Input]),
             case ftp_command(Socket, State, Command, Arg) of
                 {ok, NewState} ->
                     if is_pid(HookPid) ->
@@ -117,13 +113,38 @@ respond(Socket, ResponseCode, Message) ->
 
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
-    {Addr, Port} = State#connection_state.data_port,
-    case gen_tcp:connect(Addr, Port, [{active, false}, binary]) of
+    case establish_data_connection(State) of
         {ok, DataSocket} ->
             DataSocket;
         {error, Error} ->
             respond(ControlSocket, 425, "Can't open data connection"),
             throw(failed)
+    end.
+
+establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
+    gen_tcp:accept(Listen);
+establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
+    gen_tcp:connect(Addr, Port, [{active, false}, binary]).
+
+pasv_connection(ControlSocket, State) ->
+    case State#connection_state.pasv_listen of
+        {passive, Listen, {{S1,S2,S3,S4}, P}} ->
+            {P1,P2} = format_port(P),
+            respond(ControlSocket,
+                    227, 
+                    io_lib:format("Entering Passive Mode (~p,~p,~p,~p,~p,~p)",
+                                  [S1,S2,S3,S4,P1,P2])),
+                     {ok, State};
+        undefined ->
+            case listen_socket(0, [{active, false}, binary]) of
+                {ok, Listen} ->
+                    {ok, SockName} = inet:sockname(Listen),
+                    PasvSocketInfo = {passive, Listen, SockName},
+                    pasv_connection(ControlSocket,
+                                    State#connection_state{pasv_listen=PasvSocketInfo});
+                {error, Error} ->
+                    {error, Error}
+            end
     end.
 
 %% FTP COMMANDS
@@ -135,6 +156,8 @@ ftp_command(Socket, State, Command, Arg) ->
 ftp_command(_, Socket, _, quit, _) ->
     respond(Socket, 200, "Goodbye."),
     quit;
+ftp_command(_, Socket, State, pasv, _) ->
+    pasv_connection(Socket, State);
 ftp_command(_, Socket, State, user, Arg) ->
     respond(Socket, 331),
     {ok, State#connection_state{user_name=Arg}};
@@ -143,7 +166,8 @@ ftp_command(_, Socket, State, port, Arg) ->
         {ok, {Addr, Port} = AddrPort} ->
             respond(Socket, 200),
             io:format("Data port set to ~p~n", [AddrPort]),
-            {ok, State#connection_state{data_port = AddrPort}};
+            
+            {ok, State#connection_state{data_port = {active, Addr, Port}}};
          _ ->
             respond(Socket, 452, "Error parsing address.")
         end;
@@ -477,18 +501,24 @@ addr6([H4,H3,H2,H1|Addr],Acc) when H4<16,H3<16,H2<16,H1<16 ->
 addr6([], Acc) -> {ok, list_to_tuple(Acc)};
 addr6(_, _) -> error.
 
+format_port(PortNumber) ->
+    [A,B] = binary_to_list(<<PortNumber:16>>),
+    {A, B}.
+
 % TESTS
 -ifdef(TEST).
 
 -define(initBifrostTest(),
-         meck:new(gen_tcp, [unstick]),
-         meck:new(memory_server, [unstick, passthrough])).
+        meck:new(gen_tcp, [unstick]),
+        meck:new(inet, [unstick, passthrough]),
+        meck:new(memory_server, [unstick, passthrough])).
 
 -define(executeBifrostTest(LISTENER_PID),
         control_loop(LISTENER_PID, LISTENER_PID, socket, #connection_state{module=memory_server}),
         meck:validate(memory_server),
         meck:validate(gen_tcp),
         meck:unload(memory_server),
+        meck:unload(inet),
         meck:unload(gen_tcp)).
 
 strip_newlines_test() ->
@@ -528,6 +558,8 @@ mock_socket_response(S, R) ->
 
 control_connection_establishment_test() ->
     meck:new(gen_tcp, [unstick]),
+    meck:new(inet, [unstick, passthrough]),
+    meck:expect(inet, sockname, fun(another_socket) -> {ok, {{127,0,0,1}, 2000}} end),
     meck:expect(gen_tcp, accept, fun(some_socket) -> {ok, another_socket} end),
     mock_socket_response(another_socket, "220 FTP Server Ready\r\n"),
     Myself = self(),
@@ -540,6 +572,7 @@ control_connection_establishment_test() ->
     end,
     Child ! {tcp_closed, another_socket},
     meck:validate(gen_tcp),
+    meck:unload(inet),
     meck:unload(gen_tcp).
 
 authenticate_state(State) ->
@@ -610,6 +643,7 @@ authenticate_failure_test() ->
     {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
     meck:validate(memory_server),
     meck:validate(gen_tcp),
+    meck:unload(inet),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
 
@@ -755,6 +789,36 @@ pwd_test() ->
     ?executeBifrostTest(Child).
 
 test_data_socket(ControlPid) ->
+    test_data_socket(ControlPid, active).
+
+test_data_socket(ControlPid, passive) ->
+    meck:expect(gen_tcp,
+                listen,
+                fun(_, _, _) ->
+                        {ok, listen_socket}
+                end),
+
+    meck:expect(gen_tcp,
+                accept,
+                fun(listen_socket) ->
+                        {ok, data_socket}
+                end),
+
+    meck:expect(inet,
+                sockname,
+                fun(listen_socket) ->
+                        {ok, {{127, 0, 0, 1}, 2000}}
+                end),
+
+    mock_socket_response(socket,
+                         "227 Entering Passive Mode (127,0,0,1,7,208).\r\n"),
+
+    ControlPid ! {tcp, socket, "PASV"},
+    receive
+        {new_state, _, #connection_state{data_port={passive, {127,0,0,1}, 2000}}} ->
+            ok
+    end;
+test_data_socket(ControlPid, active) ->
     meck:expect(gen_tcp,
                 connect,
                 fun(_, _, _) ->
@@ -766,7 +830,7 @@ test_data_socket(ControlPid) ->
 
     ControlPid ! {tcp, socket, "PORT 127,0,0,1,7,208"},
     receive
-        {new_state, _, #connection_state{data_port={{127,0,0,1}, 2000}}} ->
+        {new_state, _, #connection_state{data_port={active, {127,0,0,1}, 2000}}} ->
             ok
     end.
 
@@ -794,7 +858,7 @@ nlst_test() ->
               fun() ->
                       login_test_user(Myself),
 
-                      test_data_socket(Myself),
+                      test_data_socket(Myself, active),
                       Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
                        [data_socket, "edward\r\n"],
                        [data_socket, "Aethelred\r\n"],
