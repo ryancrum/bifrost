@@ -108,8 +108,9 @@ respond(Socket, ResponseCode) ->
     respond(Socket, ResponseCode, response_code_string(ResponseCode)).
 
 respond(Socket, ResponseCode, Message) ->
+    Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
     gen_tcp:send(Socket, 
-                 integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n").
+                 Line).
 
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
@@ -132,8 +133,9 @@ pasv_connection(ControlSocket, State) ->
             {P1,P2} = format_port(P),
             respond(ControlSocket,
                     227, 
-                    io_lib:format("Entering Passive Mode (~p,~p,~p,~p,~p,~p)",
-                                  [S1,S2,S3,S4,P1,P2])),
+                    lists:flatten(
+                      io_lib:format("Entering Passive Mode (~p,~p,~p,~p,~p,~p)",
+                                    [S1,S2,S3,S4,P1,P2]))),
                      {ok, State};
         undefined ->
             case listen_socket(0, [{active, false}, binary]) of
@@ -521,6 +523,12 @@ format_port(PortNumber) ->
         meck:unload(inet),
         meck:unload(gen_tcp)).
 
+-define(dataSocketTest(TEST_NAME),
+        TEST_NAME() ->
+               TEST_NAME(active),
+               TEST_NAME(passive)).
+
+
 strip_newlines_test() ->
     "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
     "testing again" = strip_newlines("testing again").
@@ -549,8 +557,9 @@ mock_socket_response(S, R) ->
     meck:expect(gen_tcp,
                 send,
                 fun(S2, R2) ->
-                        S2 = S,
-                        R2 = R,
+                        ?assertEqual(S, S2),
+                        ?assertEqual(R, 
+                                     R2),
                         ok
                 end).
 
@@ -788,13 +797,10 @@ pwd_test() ->
               end),
     ?executeBifrostTest(Child).
 
-test_data_socket(ControlPid) ->
-    test_data_socket(ControlPid, active).
-
 test_data_socket(ControlPid, passive) ->
     meck:expect(gen_tcp,
                 listen,
-                fun(_, _, _) ->
+                fun(0, _) ->
                         {ok, listen_socket}
                 end),
 
@@ -811,12 +817,14 @@ test_data_socket(ControlPid, passive) ->
                 end),
 
     mock_socket_response(socket,
-                         "227 Entering Passive Mode (127,0,0,1,7,208).\r\n"),
+                         "227 Entering Passive Mode (127,0,0,1,7,208)\r\n"),
 
     ControlPid ! {tcp, socket, "PASV"},
     receive
-        {new_state, _, #connection_state{data_port={passive, {127,0,0,1}, 2000}}} ->
-            ok
+        {new_state, _, #connection_state{pasv_listen={passive, listen_socket, {{127,0,0,1}, 2000}}}} ->
+            ok;
+        _ ->
+            ?assert(bad_value)
     end;
 test_data_socket(ControlPid, active) ->
     meck:expect(gen_tcp,
@@ -845,7 +853,8 @@ expect_responses([[Socket, Content] | Responses]) ->
                         expect_responses(Responses)
                 end).
 
-nlst_test() ->
+?dataSocketTest(nlst_test).
+nlst_test(Mode) ->
     ?initBifrostTest(),
     meck:expect(memory_server,
                 list_files,
@@ -858,7 +867,7 @@ nlst_test() ->
               fun() ->
                       login_test_user(Myself),
 
-                      test_data_socket(Myself, active),
+                      test_data_socket(Myself, Mode),
                       Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
                        [data_socket, "edward\r\n"],
                        [data_socket, "Aethelred\r\n"],
@@ -877,7 +886,8 @@ nlst_test() ->
               end),
     ?executeBifrostTest(Child).
 
-list_test() ->
+?dataSocketTest(list_test).
+list_test(Mode) ->
     ?initBifrostTest(),
     meck:expect(memory_server,
                 list_files,
@@ -902,11 +912,11 @@ list_test() ->
               fun() ->
                       login_test_user(Myself),
 
-                      test_data_socket(Myself),
+                      test_data_socket(Myself, Mode),
                       Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
-                       [data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"],
-                       [data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"],
-                       [socket, "226 Closing data connection.\r\n"]],
+                                   [data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"],
+                                   [data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"],
+                                   [socket, "226 Closing data connection.\r\n"]],
 
                       expect_responses(Responses),
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
@@ -969,13 +979,14 @@ remove_file_test() ->
              end),
     ?executeBifrostTest(Child).
 
-stor_test() ->
+?dataSocketTest(stor_test).
+stor_test(Mode) ->
     ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
              fun() ->
                      login_test_user(Myself),
-                     test_data_socket(Myself),
+                     test_data_socket(Myself, Mode),
                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
                                   [socket, "226 Closing data connection.\r\n"]],
                      expect_responses(Responses),
@@ -1003,13 +1014,14 @@ stor_test() ->
              end),
     ?executeBifrostTest(Child).
 
-retr_test() ->
+?dataSocketTest(retr_test).
+retr_test(Mode) ->
     ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
              fun() ->
                      login_test_user(Myself),
-                     test_data_socket(Myself),
+                     test_data_socket(Myself, Mode),
                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
                                   [data_socket, "SOME DATA HERE"],
                                   [data_socket, "SOME MORE DATA"],
