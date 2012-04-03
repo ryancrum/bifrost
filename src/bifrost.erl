@@ -395,7 +395,7 @@ list_file_names_to_socket(DataSocket, Files) ->
     ok.
 
 %% OUTPUT FORMATTING
-%% Most of this code has been shamelessly/fully 
+%% Some of this formatting code has been shamelessly/fully 
 %% yanked from jungerl/ftpd.erl
 %% FTP code strings 
 response_code_string(110) -> "MARK yyyy = mmmm";             %% ARGS
