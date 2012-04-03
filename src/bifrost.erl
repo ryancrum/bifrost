@@ -572,6 +572,7 @@ authenticate_successful_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -602,6 +603,7 @@ authenticate_failure_test() ->
                       end
               end),
     {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -660,6 +662,7 @@ mkdir_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -691,6 +694,7 @@ cwd_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -733,6 +737,7 @@ cdup_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -759,6 +764,7 @@ pwd_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -822,6 +828,7 @@ nlst_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
     meck:unload(gen_tcp).
@@ -870,8 +877,37 @@ list_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(memory_server),
     meck:validate(gen_tcp),
     meck:unload(memory_server),
-    meck:unload(gen_tcp).    
+    meck:unload(gen_tcp).
+
+remove_directory_test() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
+    Myself = self(),
+    Child = spawn_link(
+             fun() -> 
+                     login_test_user(Myself),
+                     mock_socket_response(socket,
+                                          "200 Command okay.\r\n"),
+                     meck:expect(memory_server,
+                                 remove_directory,
+                                 fun(St, "/bison/burgers") ->
+                                         {ok, St}
+                                 end),
+                     
+                     Myself ! {tcp, socket, "RMD /bison/burgers"},
+                     receive
+                         {new_state, _, _} ->
+                             ok
+                     end,
+                     
+                     Myself ! {tcp_closed, socket}
+             end),
+    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    meck:validate(gen_tcp),
+    meck:unload(memory_server),
+    meck:unload(gen_tcp).
     
 -endif.
