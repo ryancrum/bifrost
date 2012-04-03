@@ -83,7 +83,6 @@ control_loop(SrvPid, HookPid, Socket, State) ->
     receive
         {tcp, Socket, Input} ->
             {Command, Arg} = parse_input(Input),
-            io:format("RC: ~p~n", [Input]),
             case ftp_command(Socket, State, Command, Arg) of
                 {ok, NewState} ->
                     if is_pid(HookPid) ->
@@ -187,6 +186,10 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
 ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, Command, _) ->
     respond(Socket, 530),
     {ok, State};
+
+ftp_command(_, Socket, State, rein, _) ->
+    {ok, 
+     State#connection_state{user_name=none,authenticated_state=unauthenticated}};
 
 ftp_command(Mod, Socket, State, pwd, _) ->
     respond(Socket, 257, Mod:current_directory(State)),
@@ -1049,6 +1052,25 @@ retr_test(Mode) ->
                      end,
                      Myself ! {tcp_closed, socket}
              end),
+    ?executeBifrostTest(Child).
+
+rein_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "200 Command okay.\r\n"),
+                      Myself ! {tcp, socket, "REIN"},
+                      receive
+                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} -> 
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      Myself ! {tcp_closed, socket}
+              end),
     ?executeBifrostTest(Child).
 
 -endif.
