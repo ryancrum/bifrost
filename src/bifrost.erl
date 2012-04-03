@@ -480,6 +480,17 @@ addr6(_, _) -> error.
 % TESTS
 -ifdef(TEST).
 
+-define(initBifrostTest(),
+         meck:new(gen_tcp, [unstick]),
+         meck:new(memory_server, [unstick, passthrough])).
+
+-define(executeBifrostTest(LISTENER_PID),
+        control_loop(LISTENER_PID, LISTENER_PID, socket, #connection_state{module=memory_server}),
+        meck:validate(memory_server),
+        meck:validate(gen_tcp),
+        meck:unload(memory_server),
+        meck:unload(gen_tcp)).
+
 strip_newlines_test() ->
     "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
     "testing again" = strip_newlines("testing again").
@@ -563,23 +574,17 @@ login_test_user(SocketPid, InitialState) ->
     end.
 
 authenticate_successful_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
               fun() ->
                       login_test_user(Myself),
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 authenticate_failure_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     meck:expect(memory_server, 
                 login, 
                 fun(_, "meat", "meatmeat") ->
@@ -632,8 +637,7 @@ unauthenticated_test() ->
     meck:unload(gen_tcp).
 
 mkdir_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
               fun() ->
@@ -661,16 +665,11 @@ mkdir_test() ->
                       end,
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 % TODO: impure test
 cwd_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     InitialState = memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]),
 
     Myself = self(),
@@ -693,16 +692,11 @@ cwd_test() ->
                       
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 % TODO: impure test
 cdup_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     {ok, InitialState} = memory_server:change_directory(memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]), 
                                                         "/meat/bovine"),
 
@@ -736,15 +730,10 @@ cdup_test() ->
                       
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
-    
+    ?executeBifrostTest(Child).
+
 pwd_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
               fun() ->
@@ -763,11 +752,7 @@ pwd_test() ->
 
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 test_data_socket(ControlPid) ->
     meck:expect(gen_tcp,
@@ -797,8 +782,7 @@ expect_responses([[Socket, Content] | Responses]) ->
                 end).
 
 nlst_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     meck:expect(memory_server,
                 list_files,
                 fun(_, _) ->
@@ -827,15 +811,10 @@ nlst_test() ->
 
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 list_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     meck:expect(memory_server,
                 list_files,
                 fun(_, _) ->
@@ -876,15 +855,10 @@ list_test() ->
 
                       Myself ! {tcp_closed, socket}
               end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
+    ?executeBifrostTest(Child).
 
 remove_directory_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(memory_server, [unstick, passthrough]),
+    ?initBifrostTest(),
     Myself = self(),
     Child = spawn_link(
              fun() -> 
@@ -905,9 +879,6 @@ remove_directory_test() ->
                      
                      Myself ! {tcp_closed, socket}
              end),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(gen_tcp),
-    meck:unload(memory_server),
-    meck:unload(gen_tcp).
-    
+    ?executeBifrostTest(Child).
+
 -endif.
