@@ -535,19 +535,25 @@ login_test_user(SocketPid) ->
     mock_socket_response(socket, "331 User name okay, need password.\r\n"),
     SocketPid ! {tcp, socket, "USER meat"},
     receive
-        {new_state, _, #connection_state{user_name="meat"}} ->
+        {new_state, _, _} ->
             ok
     end,
     
     mock_socket_response(socket, "230 User logged in, proceed.\r\n"),
+    meck:expect(memory_server, 
+                login, 
+                fun(St, "meat", "meatmeat") ->
+                        {true, St}
+                end),
     SocketPid ! {tcp, socket, "PASS meatmeat"},
     receive
-        {new_state, _, #connection_state{authenticated_state=authenticated}} ->
+        {new_state, _, _} ->
             ok
     end.
 
 authenticate_successful_test() ->
     meck:new(gen_tcp, [unstick]),
+    meck:new(memory_server, [unstick, passthrough]),
     Myself = self(),
     Child = spawn_link(
               fun() ->
@@ -556,6 +562,7 @@ authenticate_successful_test() ->
               end),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
     meck:validate(gen_tcp),
+    meck:unload(memory_server),
     meck:unload(gen_tcp).
 
 authenticate_failure_test() ->
@@ -596,6 +603,11 @@ mkdir_test() ->
               fun() ->
                       login_test_user(Myself),
                       mock_socket_response(socket, "250 \"test_dir\" directory created.\r\n"),
+                      meck:expect(memory_server,
+                                  make_directory,
+                                  fun(State, _) -> 
+                                          {ok, State}
+                                  end),
                       Myself ! {tcp, socket, "MKD test_dir"},
                       receive
                           {new_state, _, _} -> ok
