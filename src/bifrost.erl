@@ -36,20 +36,20 @@ init_sync(HookModule) ->
             {stop, Error}
     end.
     
-handle_call(Request, From, State) ->
+handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast(Msg, State) ->
+handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(Info, State) ->
+handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(Reason, State) ->
+terminate(_Reason, _State) ->
     ok.
 
-code_change(OldVsn, State, Extra) ->
+code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 listen_socket(Port, TcpOpts) ->
@@ -64,8 +64,8 @@ await_connections(Listen, Mod) ->
                         establish_control_connection,
                         [self(), Listen, Mod]),
     receive
-        {accepted, ChildPid} -> await_connections(Listen, Mod);
-        Error -> await_connections(Listen, Mod)
+        {accepted, _ChildPid} -> await_connections(Listen, Mod);
+        _ -> await_connections(Listen, Mod)
     end.
 
 establish_control_connection(SrvPid, Listen, Mod) ->
@@ -118,7 +118,7 @@ data_connection(ControlSocket, State) ->
             DataSocket;
         {error, Error} ->
             respond(ControlSocket, 425, "Can't open data connection"),
-            throw(failed)
+            throw(Error)
     end.
 
 establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
@@ -128,7 +128,7 @@ establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
-        {passive, Listen, {{S1,S2,S3,S4}, P}} ->
+        {passive, _, {{S1,S2,S3,S4}, P}} ->
             {P1,P2} = format_port(P),
             respond(ControlSocket,
                     227, 
@@ -183,11 +183,12 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
      end;
 
 %% from this point on every command requires authentication
-ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, Command, _) ->
+ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _) ->
     respond(Socket, 530),
     {ok, State};
 
 ftp_command(_, Socket, State, rein, _) ->
+    respond(Socket, 200),
     {ok, 
      State#connection_state{user_name=none,authenticated_state=unauthenticated}};
 
@@ -254,7 +255,7 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             {ok, State}
         end;
 
-ftp_command(Mod, Socket, State, syst, _) ->
+ftp_command(_, Socket, State, syst, _) ->
     respond(Socket, 215, "UNIX Type: L8"),
     {ok, State};
 
@@ -270,7 +271,7 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
 
 ftp_command(Mod, Socket, State, stor, Arg) ->
     DataSocket = data_connection(Socket, State),
-    Fun = fun(Size) ->
+    Fun = fun(_) ->
                   case gen_tcp:recv(DataSocket, 0) of
                       {ok, Data} ->
                           {ok, Data, size(Data)};
@@ -310,12 +311,12 @@ ftp_command(Mod, Socket, State, mdtm, Arg) ->
             respond(Socket, 
                     213,
                     format_mdtm_date(FileInfo#file_info.mtime));
-        Error ->
+        _ ->
             respond(Socket, 550)
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, rnfr, Arg) ->
+ftp_command(_, Socket, State, rnfr, Arg) ->
     respond(Socket, 350, "Ready for RNTO."),
     {ok, State#connection_state{rnfr=Arg}};
 
@@ -326,8 +327,9 @@ ftp_command(Mod, Socket, State, rnto, Arg) ->
             {ok, State};
         Rnfr ->
             case Mod:rename_file(State, Rnfr, Arg) of
-                {error, Error} ->
-                    respond(Socket, 550);
+                {error, _} ->
+                    respond(Socket, 550),
+                    {ok, State};
                 {ok, NewState} ->
                     respond(Socket, 250, "Rename successful."),
                     {ok, NewState#connection_state{rnfr=undefined}}
@@ -350,7 +352,7 @@ ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
 
     
-ftp_command(Mod, Socket, State, Command, _) ->
+ftp_command(_, Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
     {ok, State}.
@@ -1094,7 +1096,7 @@ retr_test(Mode) ->
                      expect_responses(Responses),
                      meck:expect(memory_server,
                                  get_file,
-                                 fun(S, "bologna.txt") ->
+                                 fun(_, "bologna.txt") ->
                                          {ok, 
                                           fun(1024) -> 
                                                   {ok, 

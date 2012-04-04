@@ -32,7 +32,7 @@
 init(_) ->
     {}.
 
-login(State, Username, Password) ->
+login(State, _Username, _Password) ->
     {true, initialize_state(State)}.
 
 current_directory(State) ->
@@ -90,7 +90,7 @@ remove_file(State, File) ->
             {error, unknown}
     end.
 
-rename_file(State, FromPath, ToPath) ->
+rename_file(_State, _FromPath, _ToPath) ->
     {error, not_supported}.
 
 remove_directory(State, Directory) ->
@@ -140,7 +140,7 @@ list_files(State, Directory) ->
 % write.
 % FileRetrievalFun is fun(ByteCount) and retrieves ByteCount bytes
 %  and returns {ok, Bytes, Count} or done
-put_file(State, ProvidedFileName, Mode, FileRetrievalFun) ->
+put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
     Target = absolute_path(State, FileName),
     ModState = get_module_state(State),
@@ -222,9 +222,9 @@ absolute_path(State, Directory=[FirstChar | _]) ->
 resolve_path(State, Path) ->
     resolve_path(State, Path, []).
 
-resolve_path(State, [], []) ->
+resolve_path(_, [], []) ->
     [[]]; % back to the root
-resolve_path(State, [], R) ->
+resolve_path(_, [], R) ->
     R;
 resolve_path(State, [H|T], R) ->
     case H of
@@ -380,7 +380,7 @@ change_directory_test() ->
     {ok, StateBefore} = change_directory(StateBefore, "."),
     {ok, StateAfter} = change_directory(StateBefore, ".."),
     {ok, StateAfter} = change_directory(StateBefore, "/testing"),
-    {error, StageBefore} = change_directory(StateBefore, "/magical/unicorn").
+    {error, StateBefore} = change_directory(StateBefore, "/magical/unicorn").
 
 remove_directory_test() ->
     FSBefore = set_path(create_fs(), ["testing", "123"], new_directory("123")),
