@@ -15,7 +15,8 @@
          put_file/4, 
          get_file/2, 
          file_info/2,
-         rename_file/3]).
+         rename_file/3,
+         site_command/3]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -201,6 +202,9 @@ reading_fun(Pos, Bytes) ->
                     {ok, Window, reading_fun(Pos + ReadCount, Bytes)}
             end
     end.
+
+site_command(_, _, _) ->
+    {error, not_found}.
 
 %% priv
 get_module_state(State) ->

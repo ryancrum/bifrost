@@ -13,6 +13,7 @@ behaviour_info(callbacks) ->
      {put_file, 4}, 
      {get_file, 2}, 
      {file_info, 2},
-     {rename_file, 3}];
+     {rename_file, 3},
+     {site_command, 3}];
 behaviour_info(_) ->
     undefined.

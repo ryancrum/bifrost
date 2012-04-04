@@ -293,6 +293,20 @@ ftp_command(_, Socket, State, type, Arg) ->
     end,
     {ok, State};
 
+ftp_command(Mod, Socket, State, site, Arg) ->
+    [Command | Sargs] = string:tokens(Arg, " "),
+    case Mod:site_command(State, list_to_atom(string:to_lower(Command)), string:join(Sargs, " ")) of
+        {ok, NewState} ->
+            respond(Socket, 200),
+            {ok, NewState};
+        {error, not_found} ->
+            respond(Socket, 500),
+            {ok, State};
+        {error, _} ->
+            respond(Socket, 501, "Error completing command."),
+            {ok, State}
+    end;
+
 ftp_command(Mod, Socket, State, retr, Arg) ->
     DataSocket = data_connection(Socket, State),
     case Mod:get_file(State, Arg) of
@@ -1222,6 +1236,45 @@ type_test() ->
 
                       mock_socket_response(socket, "501 Only TYPE I may be used.\r\n"),
                       Myself ! {tcp, socket, "TYPE A"},
+                      receive
+                          {new_state, _, _} ->
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end
+             ),
+    ?executeBifrostTest(Child).
+
+site_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "200 Command okay.\r\n"),
+                      meck:expect(memory_server,
+                                  site_command,
+                                  fun(S, monkey, "cheese bits") ->
+                                          {ok, S}
+                                  end),
+                      Myself ! {tcp, socket, "SITE MONKEY cheese bits"},
+                      receive
+                          {new_state, _, _} ->
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      mock_socket_response(socket, "500 Syntax error, command unrecognized.\r\n"),
+                      meck:expect(memory_server,
+                                  site_command,
+                                  fun(_, gorilla, "cheese") ->
+                                          {error, not_found}
+                                  end),
+                      Myself ! {tcp, socket, "SITE GORILLA cheese"},
                       receive
                           {new_state, _, _} ->
                               ok;
