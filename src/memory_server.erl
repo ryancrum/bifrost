@@ -2,6 +2,8 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-behavior(gen_bifrost_server).
+
 -export([login/3, 
          init/1, 
          current_directory/1, 
