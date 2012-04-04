@@ -988,6 +988,20 @@ remove_directory_test() ->
                              ok
                      end,
 
+                     mock_socket_response(socket,
+                                          "450 Requested file action not taken.\r\n"),
+                     meck:expect(memory_server,
+                                 remove_directory,
+                                 fun(_, "/bison/burgers") ->
+                                         {error, error}
+                                 end),
+
+                     Myself ! {tcp, socket, "RMD /bison/burgers"},
+                     receive
+                         {new_state, _, _} ->
+                             ok
+                     end,                     
+
                      Myself ! {tcp_closed, socket}
              end),
     ?executeBifrostTest(Child).
@@ -1011,6 +1025,20 @@ remove_file_test() ->
                          {new_state, _, _} ->
                              ok
                      end,
+
+                     mock_socket_response(socket,
+                                          "450 Requested file action not taken.\r\n"),
+                     meck:expect(memory_server,
+                                 remove_file,
+                                 fun(_, "cheese.txt") ->
+                                         {error, error}
+                                 end),
+
+                     Myself ! {tcp, socket, "DELE cheese.txt"},
+                     receive
+                         {new_state, _, _} ->
+                             ok
+                     end,                     
 
                      Myself ! {tcp_closed, socket}
              end),
@@ -1174,5 +1202,54 @@ rnfr_rnto_test() ->
                       Myself ! {tcp_closed, socket}
               end),
     ?executeBifrostTest(Child).
-    
+
+type_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "200 Command okay.\r\n"),
+                      Myself ! {tcp, socket, "TYPE I"},
+                      receive
+                          {new_state, _, _} ->
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+
+                      mock_socket_response(socket, "501 Only TYPE I may be used.\r\n"),
+                      Myself ! {tcp, socket, "TYPE A"},
+                      receive
+                          {new_state, _, _} ->
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end
+             ),
+    ?executeBifrostTest(Child).
+
+unrecognized_command_test() ->
+    ?initBifrostTest(),
+    Myself = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(Myself),
+                      mock_socket_response(socket, "500 Syntax error, command unrecognized.\r\n"),
+                      Myself ! {tcp, socket, "FEED buffalo"},
+                      receive
+                          {new_state, _, _} ->
+                              ok;
+                          _ ->
+                              ?assert(fail)
+                      end,
+                      
+                      Myself ! {tcp_closed, socket}
+              end
+             ),
+    ?executeBifrostTest(Child).    
+
 -endif.
