@@ -5,13 +5,13 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/1, init_sync/2, establish_control_connection/3, await_connections/2]).
+-export([start_link/2, init_sync/2, establish_control_connection/3, await_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
-start_link(HookModule) ->
-    gen_server:start_link(?MODULE, [HookModule], []).
+start_link(HookModule, Port) ->
+    gen_server:start_link(?MODULE, [HookModule, Port], []).
 
 init([HookModule, Port]) ->
     case listen_socket(Port, [{reuseaddr, true}]) of
