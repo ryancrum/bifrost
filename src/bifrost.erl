@@ -13,8 +13,8 @@
 start_link(HookModule) ->
     gen_server:start_link(?MODULE, [HookModule], []).
 
-init([HookModule]) ->
-    case listen_socket(5000, [{reuseaddr, true}]) of
+init([HookModule, Port]) ->
+    case listen_socket(Port, [{reuseaddr, true}]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
@@ -24,8 +24,8 @@ init([HookModule]) ->
             {stop, Error}
     end.
 
-init_sync(HookModule) ->
-    case listen_socket(5000, [{reuseaddr, true}]) of
+init_sync(HookModule, Port) ->
+    case listen_socket(Port, [{reuseaddr, true}]) of
         {ok, Listen} ->
             await_connections_sync(Listen, HookModule),
             {ok, done};
