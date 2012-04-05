@@ -5,7 +5,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/1, init_sync/1, establish_control_connection/3, await_connections/2]).
+-export([start_link/1, init_sync/2, establish_control_connection/3, await_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
