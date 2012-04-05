@@ -10,10 +10,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
-start_link() ->
-    start_link(memory_server).
-
-start_link(HookModule) ->
+start_link([HookModule]) ->
     gen_server:start_link(?MODULE, [HookModule], []).
 
 init([HookModule]) ->
@@ -22,7 +19,7 @@ init([HookModule]) ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
                                 [Listen, HookModule]),
-            {ok, done};
+            {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
     end.
@@ -46,6 +43,8 @@ handle_cast(_Msg, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
+terminate(_Reason, {listen_socket, Socket}) ->
+    gen_tcp:close(Socket);
 terminate(_Reason, _State) ->
     ok.
 
