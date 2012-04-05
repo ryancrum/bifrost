@@ -14,7 +14,7 @@ start_link(HookModule) ->
     gen_server:start_link(?MODULE, [HookModule], []).
 
 init([HookModule]) ->
-    case listen_socket(5000, []) of
+    case listen_socket(5000, [{reuseaddr, true}]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
