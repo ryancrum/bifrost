@@ -25,7 +25,7 @@ init([HookModule]) ->
     end.
 
 init_sync(HookModule) ->
-    case listen_socket(5000, []) of
+    case listen_socket(5000, [{reuseaddr, true}]) of
         {ok, Listen} ->
             await_connections_sync(Listen, HookModule),
             {ok, done};
