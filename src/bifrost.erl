@@ -5,7 +5,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/2, init_sync/2, establish_control_connection/3, await_connections/2]).
+-export([start_link/2, establish_control_connection/4, await_connections/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -13,22 +13,13 @@
 start_link(HookModule, Port) ->
     gen_server:start_link(?MODULE, [HookModule, Port], []).
 
-init([HookModule, Port]) ->
+init([HookModule, IpAddress, Port]) ->
     case listen_socket(Port, [{reuseaddr, true}]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, HookModule]),
+                                [Listen, IpAddress, HookModule]),
             {ok, {listen_socket, Listen}};
-        {error, Error} ->
-            {stop, Error}
-    end.
-
-init_sync(HookModule, Port) ->
-    case listen_socket(Port, [{reuseaddr, true}]) of
-        {ok, Listen} ->
-            await_connections_sync(Listen, HookModule),
-            {ok, done};
         {error, Error} ->
             {stop, Error}
     end.
@@ -54,26 +45,22 @@ code_change(_OldVsn, State, _Extra) ->
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
 
-await_connections_sync(Listen, Mod) ->
-    establish_control_connection(self(), Listen, Mod),
-    await_connections_sync(Listen, Mod).
-
-await_connections(Listen, Mod) ->
+await_connections(Listen, IpAddress, Mod) ->
     proc_lib:spawn_link(?MODULE,
                         establish_control_connection,
-                        [self(), Listen, Mod]),
+                        [self(), Listen, IpAddress, Mod]),
     receive
-        {accepted, _ChildPid} -> await_connections(Listen, Mod);
-        _ -> await_connections(Listen, Mod)
+        {accepted, _ChildPid} -> await_connections(Listen, IpAddress, Mod);
+        _ -> await_connections(Listen, IpAddress, Mod)
     end.
 
-establish_control_connection(SrvPid, Listen, Mod) ->
+establish_control_connection(SrvPid, Listen, IpAddress, Mod) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
             io:format("CONNECTION ESTABLISHED: ~p~n", [inet:sockname(Socket)]),
             SrvPid ! {accepted, self()},
             respond(Socket, 220, "FTP Server Ready"),
-            control_loop(SrvPid, none, Socket, #connection_state{module=Mod});
+            control_loop(SrvPid, none, Socket, #connection_state{module=Mod, ip_address=IpAddress});
         _Error ->
             exit(bad_accept)
     end.
@@ -138,8 +125,8 @@ pasv_connection(ControlSocket, State) ->
         undefined ->
             case listen_socket(0, [{active, false}, binary]) of
                 {ok, Listen} ->
-                    {ok, SockName} = inet:sockname(Listen),
-                    PasvSocketInfo = {passive, Listen, SockName},
+                    {ok, {_, Port}} = inet:sockname(Listen),
+                    PasvSocketInfo = {passive, Listen, {State#connection_state.ip_address, Port}},
                     pasv_connection(ControlSocket,
                                     State#connection_state{pasv_listen=PasvSocketInfo});
                 {error, Error} ->
@@ -568,7 +555,7 @@ format_port(PortNumber) ->
         meck:new(memory_server, [unstick, passthrough])).
 
 -define(executeBifrostTest(LISTENER_PID),
-        control_loop(LISTENER_PID, LISTENER_PID, socket, #connection_state{module=memory_server}),
+        control_loop(LISTENER_PID, LISTENER_PID, socket, #connection_state{module=memory_server,ip_address={127,0,0,1}}),
         meck:validate(memory_server),
         meck:validate(gen_tcp),
         meck:unload(memory_server),
@@ -625,7 +612,7 @@ control_connection_establishment_test() ->
     mock_socket_response(another_socket, "220 FTP Server Ready\r\n"),
     Myself = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(Myself, some_socket, memory_server)
+                               establish_control_connection(Myself, some_socket, ip, memory_server)
                        end),
     receive
         {accepted, Child} ->

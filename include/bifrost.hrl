@@ -6,6 +6,7 @@
           ip,
           data_port = undefined,
           pasv_listen = undefined,
+          ip_address = undefined,
           rnfr = undefined,
           module,
           module_state
