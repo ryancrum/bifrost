@@ -274,8 +274,10 @@ ftp_command(_, Socket, State, type, Arg) ->
     case Arg of
         "I" ->
             respond(Socket, 200);
-        _ ->
-            respond(Socket, 501, "Only TYPE I may be used.")
+        "A" ->
+            respond(Socket, 200);
+        _->
+            respond(Socket, 501, "Only TYPE I or TYPE A may be used.")
     end,
     {ok, State};
 
@@ -1220,8 +1222,8 @@ type_test() ->
                               ?assert(fail)
                       end,
 
-                      mock_socket_response(socket, "501 Only TYPE I may be used.\r\n"),
-                      Myself ! {tcp, socket, "TYPE A"},
+                      mock_socket_response(socket, "501 Only TYPE I or TYPE A may be used.\r\n"),
+                      Myself ! {tcp, socket, "TYPE X"},
                       receive
                           {new_state, _, _} ->
                               ok;
