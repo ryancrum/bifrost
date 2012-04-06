@@ -10,8 +10,8 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
-start_link(HookModule, Port) ->
-    gen_server:start_link(?MODULE, [HookModule, Port], []).
+start_link(HookModule, IpAddress, Port) ->
+    gen_server:start_link(?MODULE, [HookModule, IpAddress, Port], []).
 
 init([HookModule, IpAddress, Port]) ->
     case listen_socket(Port, [{reuseaddr, true}]) of
