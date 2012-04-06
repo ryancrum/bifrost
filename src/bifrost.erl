@@ -192,7 +192,7 @@ ftp_command(_, Socket, State, rein, _) ->
      State#connection_state{user_name=none,authenticated_state=unauthenticated}};
 
 ftp_command(Mod, Socket, State, pwd, _) ->
-    respond(Socket, 257, Mod:current_directory(State)),
+    respond(Socket, 257, "\"" ++ Mod:current_directory(State) ++ "\""),
     {ok, State};
 
 ftp_command(Mod, Socket, State, cdup, _) ->
@@ -838,7 +838,7 @@ pwd_test() ->
                                   fun(_) -> "/meat/bovine/bison" end),
 
                       mock_socket_response(socket,
-                                           "257 /meat/bovine/bison\r\n"),
+                                           "257 \"/meat/bovine/bison\"\r\n"),
                       Myself ! {tcp, socket, "PWD"},
                       receive
                           {new_state, _, _} ->
