@@ -14,7 +14,7 @@ start_link(HookModule, IpAddress, Port) ->
     gen_server:start_link(?MODULE, [HookModule, IpAddress, Port], []).
 
 init([HookModule, IpAddress, Port]) ->
-    case listen_socket(Port, [{reuseaddr, true}]) of
+    case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
@@ -66,17 +66,22 @@ establish_control_connection(SrvPid, Listen, IpAddress, Mod) ->
     end.
 
 control_loop(SrvPid, HookPid, Socket, State) ->
-    receive
-        {tcp, Socket, Input} ->
+    case gen_tcp:recv(Socket, 0) of
+        {ok, Input} ->
             {Command, Arg} = parse_input(Input),
             case ftp_command(Socket, State, Command, Arg) of
                 {ok, NewState} ->
                     if is_pid(HookPid) ->
-                            HookPid ! {new_state, self(), NewState};
+                            HookPid ! {new_state, self(), NewState},
+                            receive 
+                                {ack, HookPid} -> 
+                                    control_loop(SrvPid, HookPid, Socket, NewState);
+                                {done, HookPid} ->
+                                    {error, closed}
+                            end;
                        true ->
-                            ok
-                    end,
-                    control_loop(SrvPid, HookPid, Socket, NewState);
+                            control_loop(SrvPid, HookPid, Socket, NewState)
+                    end;
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
                     {error, timeout};
@@ -85,7 +90,7 @@ control_loop(SrvPid, HookPid, Socket, State) ->
                 quit ->
                     {ok, quit}
             end;
-        {tcp_closed, Socket} ->
+        {error, _Reason} ->
             io:format("DONE BRO~n")
     end.
 
@@ -152,8 +157,6 @@ ftp_command(_, Socket, State, port, Arg) ->
     case parse_address(Arg) of
         {ok, {Addr, Port} = AddrPort} ->
             respond(Socket, 200),
-            io:format("Data port set to ~p~n", [AddrPort]),
-            
             {ok, State#connection_state{data_port = {active, Addr, Port}}};
          _ ->
             respond(Socket, 452, "Error parsing address.")
@@ -381,21 +384,17 @@ parse_input(Input) ->
     {list_to_atom(string:to_lower(Command)), string:join(Args, " ")}.
 
 list_files_to_socket(DataSocket, Files) ->
-    io:format("Listing files ~p~n", [Files]),
     lists:map(fun(Info) -> 
                       gen_tcp:send(DataSocket, 
                                    file_info_to_string(Info) ++ "\r\n") end,
               Files),
-    io:format("Done listing~n"),
     ok.
 
 list_file_names_to_socket(DataSocket, Files) ->
-    io:format("Listing files ~p~n", [Files]),
     lists:map(fun(Info) -> 
                       gen_tcp:send(DataSocket, 
                                    Info#file_info.name ++ "\r\n") end,
               Files),
-    io:format("Done listing~n"),
     ok.
 
 %% OUTPUT FORMATTING
@@ -556,19 +555,24 @@ format_port(PortNumber) ->
         meck:new(inet, [unstick, passthrough]),
         meck:new(memory_server, [unstick, passthrough])).
 
--define(executeBifrostTest(LISTENER_PID),
-        control_loop(LISTENER_PID, LISTENER_PID, socket, #connection_state{module=memory_server,ip_address={127,0,0,1}}),
-        meck:validate(memory_server),
-        meck:validate(gen_tcp),
-        meck:unload(memory_server),
-        meck:unload(inet),
-        meck:unload(gen_tcp)).
+executeBifrostTest(ListenerPid) ->
+    receive
+        go ->
+            control_loop(ListenerPid, 
+                         ListenerPid, 
+                         socket, 
+                         #connection_state{module=memory_server,ip_address={127,0,0,1}}),
+            meck:validate(memory_server),
+            meck:validate(gen_tcp),
+            meck:unload(memory_server),
+            meck:unload(inet),
+            meck:unload(gen_tcp)
+    end.
 
 -define(dataSocketTest(TEST_NAME),
         TEST_NAME() ->
                TEST_NAME(active),
                TEST_NAME(passive)).
-
 
 strip_newlines_test() ->
     "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
@@ -604,6 +608,53 @@ mock_socket_response(S, R) ->
                         ok
                 end).
 
+expect_responses([]) ->
+    ok;
+expect_responses([[Socket, Content] | Responses]) ->
+    meck:expect(gen_tcp,
+                send,
+                fun(S, C) ->
+                        ?assertEqual(Socket, S),
+                        ?assertEqual(Content, unicode:characters_to_list(C)),
+                        expect_responses(Responses)
+                end).
+
+script_dialog([]) -> 
+    meck:expect(gen_tcp,
+                recv,
+                fun(_, _) -> {error, closed} end);
+script_dialog([{Request, Response} | Rest]) ->
+    meck:expect(gen_tcp, 
+                recv,
+                fun(Socket, _) ->
+                        script_dialog([{resp, Socket, Response}] ++ Rest),
+                        {ok, Request}
+                end);
+script_dialog([{resp, Socket, Response} | Rest]) ->
+    meck:expect(gen_tcp,
+                send,
+                fun(S, C) ->
+                        ?assertEqual(Socket, S),
+                        ?assertEqual(Response, unicode:characters_to_list(C)),
+                        script_dialog(Rest)
+                end);
+script_dialog([{resp_bin, Socket, Response} | Rest]) ->
+    meck:expect(gen_tcp,
+                send,
+                fun(S, C) ->
+                        ?assertEqual(Socket, S),
+                        ?assertEqual(Response, C),
+                        script_dialog(Rest)
+                end);
+script_dialog([{req, Socket, Request} | Rest]) ->
+    meck:expect(gen_tcp, 
+                recv,
+                fun(S, _) ->
+                        ?assertEqual(S, Socket),
+                        script_dialog(Rest),
+                        {ok, Request}
+                end).
+
 % FUNCTIONAL TESTS
 
 control_connection_establishment_test() ->
@@ -612,15 +663,15 @@ control_connection_establishment_test() ->
     meck:expect(inet, sockname, fun(another_socket) -> {ok, {{127,0,0,1}, 2000}} end),
     meck:expect(gen_tcp, accept, fun(some_socket) -> {ok, another_socket} end),
     mock_socket_response(another_socket, "220 FTP Server Ready\r\n"),
-    Myself = self(),
+    script_dialog([]),
+    ControlPid = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(Myself, some_socket, ip, memory_server)
+                               establish_control_connection(ControlPid, some_socket, ip, memory_server)
                        end),
     receive
         {accepted, Child} ->
             ok
     end,
-    Child ! {tcp_closed, another_socket},
     meck:validate(gen_tcp),
     meck:unload(inet),
     meck:unload(gen_tcp).
@@ -629,42 +680,52 @@ authenticate_state(State) ->
     State#connection_state{authenticated_state=authenticated}.
 
 login_test_user(SocketPid) ->
-    login_test_user(SocketPid, pass).
+    login_test_user(SocketPid, []).
 
-login_test_user(SocketPid, InitialState) ->
-    mock_socket_response(socket, "331 User name okay, need password.\r\n"),
-    SocketPid ! {tcp, socket, "USER meat"},
+login_test_user(SocketPid, Script) ->
+    script_dialog([{req, socket, "USER meat"},
+                   {resp, socket, "331 User name okay, need password.\r\n"}, 
+                   {req, socket, "PASS meatmeat"}, 
+                   {resp, socket, "230 User logged in, proceed.\r\n"}] ++ Script),
+    SocketPid ! go,
     receive
         {new_state, _, _} ->
             ok
     end,
+    SocketPid ! {ack, self()},
 
-    mock_socket_response(socket, "230 User logged in, proceed.\r\n"),
     meck:expect(memory_server,
                 login,
                 fun(St, "meat", "meatmeat") ->
-                        case InitialState of
-                            pass ->
-                                {true, authenticate_state(St)};
-                            _ ->
-                                {true, authenticate_state(InitialState)}
-                        end
+                        {true, authenticate_state(St)}
                 end),
-    SocketPid ! {tcp, socket, "PASS meatmeat"},
     receive
         {new_state, _, _} ->
             ok
     end.
 
+step(Pid) ->
+    Pid ! {ack, self()},
+    receive 
+        {new_state, _, _} ->
+            ok;
+        _ ->
+            ?assert(fail)
+    end.
+
+finish(Pid) ->
+    Pid ! {done, self()}.
+
 authenticate_successful_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      Myself ! {tcp_closed, socket}
+                      login_test_user(ControlPid),
+                      ControlPid ! {ack, self()},
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 authenticate_failure_test() ->
     ?initBifrostTest(),
@@ -673,23 +734,23 @@ authenticate_failure_test() ->
                 fun(_, "meat", "meatmeat") ->
                         {error}
                 end),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      mock_socket_response(socket, "331 User name okay, need password.\r\n"),
-                      Myself ! {tcp, socket, "USER meat"},
                       receive
                           {new_state, _, #connection_state{user_name="meat"}} ->
                               ok
                       end,
+                      ControlPid ! {ack, self()},
 
-                      mock_socket_response(socket, "530 Login incorrect.\r\n"),
-                      Myself ! {tcp, socket, "PASS meatmeat"},
                       receive
                           {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
                               ok
-                      end
+                      end,
+                      finish(ControlPid)
               end),
+    script_dialog([{"USER meat", "331 User name okay, need password.\r\n"}, 
+                  {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
     {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
     meck:validate(memory_server),
     meck:validate(gen_tcp),
@@ -699,146 +760,133 @@ authenticate_failure_test() ->
 
 unauthenticated_test() ->
     meck:new(gen_tcp, [unstick]),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
                       mock_socket_response(socket, "530 Not logged in.\r\n"),
-                      Myself ! {tcp, socket, "CWD /hamster"},
                       receive
                           {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
                               ok
                       end,
+                      ControlPid ! {ack, self()},
 
-                      Myself ! {tcp, socket, "MKD /unicorns"},
                       receive
                           {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
                               ok
                       end,
-                      Myself ! {tcp_closed, socket}
+                      ControlPid ! {ack, self()}
               end),
+    script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"}, 
+                  {"MKD /unicorns", "530 Not logged in.\r\n"}]),
     control_loop(Child, Child, socket, #connection_state{module=memory_server}),
     meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
 mkdir_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "250 \"test_dir\" directory created.\r\n"),
                       meck:expect(memory_server,
                                   make_directory,
                                   fun(State, _) ->
                                           {ok, State}
                                   end),
-                      Myself ! {tcp, socket, "MKD test_dir"},
-                      receive
-                          {new_state, _, _} -> ok
-                      end,
+                      login_test_user(ControlPid, 
+                                      [{"MKD test_dir", "250 \"test_dir\" directory created.\r\n"},
+                                       {"MKD test_dir_2", "450 Unable to create directory\r\n"}]),
+                      step(ControlPid),
 
                       meck:expect(memory_server,
                                   make_directory,
                                   fun(_, _) ->
                                           {error, error}
                                   end),
-                      mock_socket_response(socket, "450 Unable to create directory\r\n"),
-                      Myself ! {tcp, socket, "MKD test_dir_2"},
-                      receive
-                          {new_state, _, _} -> ok
-                      end,
-                      Myself ! {tcp_closed, socket}
-              end),
-    ?executeBifrostTest(Child).
+                      step(ControlPid),
 
-% TODO: impure test
+                      finish(ControlPid)
+              end),
+    executeBifrostTest(Child).
+
 cwd_test() ->
     ?initBifrostTest(),
-    InitialState = memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]),
-
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself, InitialState),
-                      mock_socket_response(socket,
-                                           "250 directory changed to \"/meat/bovine/bison\"\r\n"),
-                      Myself ! {tcp, socket, "CWD /meat/bovine/bison"},
-                      receive
-                          {new_state, _, _} -> ok
-                      end,
+                      meck:expect(memory_server,
+                                  change_directory,
+                                  fun(State, "/meat/bovine/bison") ->
+                                          {ok, State}
+                                  end),
+                      meck:expect(memory_server,
+                                  current_directory,
+                                  fun(_) -> "/meat/bovine/bison" end),
+                      login_test_user(ControlPid, 
+                                      [{"CWD /meat/bovine/bison", "250 directory changed to \"/meat/bovine/bison\"\r\n"},
+                                       {"CWD /meat/bovine/auroch", "450 Unable to change directory\r\n"}]),
 
-                      mock_socket_response(socket,
-                                           "450 Unable to change directory\r\n"),
-                      Myself ! {tcp, socket, "CWD /meat/bovine/auroch"},
-                      receive
-                          {new_state, _, _} -> ok
-                      end,
+                      step(ControlPid),
 
-                      Myself ! {tcp_closed, socket}
+                      meck:expect(memory_server,
+                                  change_directory,
+                                  fun(State, "/meat/bovine/auroch") ->
+                                          {error, State}
+                                  end),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
-% TODO: impure test
 cdup_test() ->
     ?initBifrostTest(),
-    {ok, InitialState} = memory_server:change_directory(memory_server:fs_with_paths(["/meat/sausage", "/meat/chicken", "/meat/bovine/bison", "/meat/bovine/beef"]), 
-                                                        "/meat/bovine"),
-
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself, InitialState),
-                      mock_socket_response(socket, 
-                                           "250 directory changed to \"/meat\"\r\n"),
-                      Myself ! {tcp, socket, "CDUP"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
+                      meck:expect(memory_server,
+                                  change_directory,
+                                  fun(State, "..") -> {ok, State} end),
+                      meck:expect(memory_server,
+                                  current_directory,
+                                  fun(State) -> "/meat" end),
+                      login_test_user(ControlPid, 
+                                      [{"CDUP", "250 directory changed to \"/meat\"\r\n"}, 
+                                       {"CDUP", "250 directory changed to \"/\"\r\n"}, 
+                                       {"CDUP", "250 directory changed to \"/\"\r\n"}]),
+                      step(ControlPid),
 
-                      mock_socket_response(socket,
-                                           "250 directory changed to \"/\"\r\n"),
-                      Myself ! {tcp, socket, "CDUP"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
+                      meck:expect(memory_server,
+                                  current_directory,
+                                  fun(State) -> "/" end),
 
-                      mock_socket_response(socket,
-                                           "250 directory changed to \"/\"\r\n"),
-                      Myself ! {tcp, socket, "CDUP"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
+                      step(ControlPid),
 
-                      Myself ! {tcp_closed, socket}
+                      meck:expect(memory_server,
+                                  current_directory,
+                                  fun(State) -> "/" end),
+                      step(ControlPid),
+
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 pwd_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
                       meck:expect(memory_server,
                                   current_directory,
                                   fun(_) -> "/meat/bovine/bison" end),
 
-                      mock_socket_response(socket,
-                                           "257 \"/meat/bovine/bison\"\r\n"),
-                      Myself ! {tcp, socket, "PWD"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
+                      login_test_user(ControlPid, [{"PWD", "257 \"/meat/bovine/bison\"\r\n"}]),
 
-                      Myself ! {tcp_closed, socket}
+                      step(ControlPid),
+
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
-test_data_socket(ControlPid, passive) ->
+login_test_user_with_data_socket(ControlPid, Script, passive) ->
     meck:expect(gen_tcp,
                 listen,
                 fun(0, _) ->
@@ -857,42 +905,27 @@ test_data_socket(ControlPid, passive) ->
                         {ok, {{127, 0, 0, 1}, 2000}}
                 end),
 
-    mock_socket_response(socket,
-                         "227 Entering Passive Mode (127,0,0,1,7,208)\r\n"),
-
-    ControlPid ! {tcp, socket, "PASV"},
+    login_test_user(ControlPid, [{"PASV", "227 Entering Passive Mode (127,0,0,1,7,208)\r\n"}] ++ Script),
+    ControlPid ! {ack, self()},
     receive
         {new_state, _, #connection_state{pasv_listen={passive, listen_socket, {{127,0,0,1}, 2000}}}} ->
             ok;
         _ ->
             ?assert(bad_value)
     end;
-test_data_socket(ControlPid, active) ->
+
+login_test_user_with_data_socket(ControlPid, Script, active) ->
     meck:expect(gen_tcp,
                 connect,
                 fun(_, _, _) ->
                         {ok, data_socket}
                 end),
-
-    mock_socket_response(socket,
-                         "200 Command okay.\r\n"),
-
-    ControlPid ! {tcp, socket, "PORT 127,0,0,1,7,208"},
+    login_test_user(ControlPid, [{"PORT 127,0,0,1,7,208", "200 Command okay.\r\n"}] ++ Script),
+    ControlPid ! {ack, self()},
     receive
         {new_state, _, #connection_state{data_port={active, {127,0,0,1}, 2000}}} ->
             ok
     end.
-
-expect_responses([]) ->
-    ok;
-expect_responses([[Socket, Content] | Responses]) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S, C) ->
-                        ?assertEqual(Socket, S),
-                        ?assertEqual(Content, unicode:characters_to_list(C)),
-                        expect_responses(Responses)
-                end).
 
 ?dataSocketTest(nlst_test).
 nlst_test(Mode) ->
@@ -903,29 +936,20 @@ nlst_test(Mode) ->
                         [#file_info{type=file, name="edward"},
                          #file_info{type=dir, name="Aethelred"}]
                 end),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-
-                      test_data_socket(Myself, Mode),
-                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
-                       [data_socket, "edward\r\n"],
-                       [data_socket, "Aethelred\r\n"],
-                       [socket, "226 Closing data connection.\r\n"]],
-
-                      expect_responses(Responses),
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-
-                      Myself ! {tcp, socket, "NLST"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
-
-                      Myself ! {tcp_closed, socket}
+                      login_test_user_with_data_socket(ControlPid, 
+                                                       [{"NLST", "150 File status okay; about to open data connection.\r\n"},
+                                                       {resp, data_socket, "edward\r\n"},
+                                                       {resp, data_socket, "Aethelred\r\n"},
+                                                       {resp, socket, "226 Closing data connection.\r\n"}], 
+                                                       Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 ?dataSocketTest(list_test).
 list_test(Mode) ->
@@ -948,154 +972,114 @@ list_test(Mode) ->
                                     mtime={{2012,12,12},{12,12,12}},
                                     size=0}]
                 end),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
+                      Script = [{"LIST", "150 File status okay; about to open data connection.\r\n"},
+                                {resp, data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"},
+                                {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"},
+                                {resp, socket, "226 Closing data connection.\r\n"}],
 
-                      test_data_socket(Myself, Mode),
-                      Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
-                                   [data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"],
-                                   [data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"],
-                                   [socket, "226 Closing data connection.\r\n"]],
-
-                      expect_responses(Responses),
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-                      Myself ! {tcp, socket, "LIST"},
-                      receive
-                          {new_state, _, _} ->
-                              ok
-                      end,
-
-                      Myself ! {tcp_closed, socket}
+                      login_test_user_with_data_socket(ControlPid, 
+                                                       Script,
+                                                       Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 remove_directory_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
              fun() -> 
-                     login_test_user(Myself),
-                     mock_socket_response(socket,
-                                          "200 Command okay.\r\n"),
                      meck:expect(memory_server,
                                  remove_directory,
                                  fun(St, "/bison/burgers") ->
                                          {ok, St}
                                  end),
 
-                     Myself ! {tcp, socket, "RMD /bison/burgers"},
-                     receive
-                         {new_state, _, _} ->
-                             ok
-                     end,
+                     login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"}, 
+                                              {"RMD /bison/burgers", "450 Requested file action not taken.\r\n"}]),
+                     step(ControlPid),
 
-                     mock_socket_response(socket,
-                                          "450 Requested file action not taken.\r\n"),
                      meck:expect(memory_server,
                                  remove_directory,
                                  fun(_, "/bison/burgers") ->
                                          {error, error}
                                  end),
+                     step(ControlPid),
 
-                     Myself ! {tcp, socket, "RMD /bison/burgers"},
-                     receive
-                         {new_state, _, _} ->
-                             ok
-                     end,                     
-
-                     Myself ! {tcp_closed, socket}
+                     finish(ControlPid)
              end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 remove_file_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
              fun() -> 
-                     login_test_user(Myself),
-                     mock_socket_response(socket,
-                                          "200 Command okay.\r\n"),
                      meck:expect(memory_server,
                                  remove_file,
                                  fun(St, "cheese.txt") ->
                                          {ok, St}
                                  end),
 
-                     Myself ! {tcp, socket, "DELE cheese.txt"},
-                     receive
-                         {new_state, _, _} ->
-                             ok
-                     end,
+                     login_test_user(ControlPid, [{"DELE cheese.txt", "200 Command okay.\r\n"}, 
+                                              {"DELE cheese.txt", "450 Requested file action not taken.\r\n"}]),
+                     step(ControlPid),
 
-                     mock_socket_response(socket,
-                                          "450 Requested file action not taken.\r\n"),
                      meck:expect(memory_server,
                                  remove_file,
                                  fun(_, "cheese.txt") ->
                                          {error, error}
                                  end),
 
-                     Myself ! {tcp, socket, "DELE cheese.txt"},
-                     receive
-                         {new_state, _, _} ->
-                             ok
-                     end,                     
-
-                     Myself ! {tcp_closed, socket}
+                     step(ControlPid),
+                     finish(ControlPid)
              end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 ?dataSocketTest(stor_test).
 stor_test(Mode) ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
              fun() ->
-                     login_test_user(Myself),
-                     test_data_socket(Myself, Mode),
-                     Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
-                                  [socket, "226 Closing data connection.\r\n"]],
-                     expect_responses(Responses),
-                     meck:expect(gen_tcp,
-                                 recv,
-                                 fun(data_socket, 0) ->
-                                         {ok, list_to_binary("SOME DATA HERE")}
-                                 end),
+                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                               {req, data_socket, <<"SOME DATA HERE">>},
+                               {resp, socket, "226 Closing data connection.\r\n"}
+                              ],
                      meck:expect(memory_server,
                                  put_file,
                                  fun(S, "bologna.txt", write, F) ->
                                          {ok, Data, DataSize} = F(1024),
-                                         BinData = list_to_binary("SOME DATA HERE"),
+                                         BinData = <<"SOME DATA HERE">>,
                                          ?assertEqual(Data, BinData),
                                          ?assertEqual(DataSize, size(BinData)),
                                          {ok, S}
                                  end),
 
                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-                     Myself ! {tcp, socket, "STOR bologna.txt"},
-                     receive
-                         {new_state, _, _} -> ok
-                     end,
-                     Myself ! {tcp_closed, socket}
+
+                     login_test_user_with_data_socket(ControlPid, Script, Mode),
+                     step(ControlPid),
+                     finish(ControlPid)
              end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 ?dataSocketTest(retr_test).
 retr_test(Mode) ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
              fun() ->
-                     login_test_user(Myself),
-                     test_data_socket(Myself, Mode),
-                     Responses = [[socket, "150 File status okay; about to open data connection.\r\n"],
-                                  [data_socket, "SOME DATA HERE"],
-                                  [data_socket, "SOME MORE DATA"],
-                                  [socket, "226 Closing data connection.\r\n"]],
-                     expect_responses(Responses),
+                     Script = [{"RETR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                               {resp, data_socket, "SOME DATA HERE"},
+                               {resp, data_socket, "SOME MORE DATA"},
+                               {resp, socket, "226 Closing data connection.\r\n"}],
                      meck:expect(memory_server,
                                  get_file,
                                  fun(_, "bologna.txt") ->
@@ -1112,40 +1096,34 @@ retr_test(Mode) ->
                                  end),
 
                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-                     Myself ! {tcp, socket, "RETR bologna.txt"},
-                     receive
-                         {new_state, _, _} -> ok
-                     end,
-                     Myself ! {tcp_closed, socket}
+                     login_test_user_with_data_socket(ControlPid, Script, Mode),
+                     step(ControlPid),
+                     finish(ControlPid)
              end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 rein_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "200 Command okay.\r\n"),
-                      Myself ! {tcp, socket, "REIN"},
+                      login_test_user(ControlPid, [{"REIN", "200 Command okay.\r\n"}]),
+                      ControlPid ! {ack, self()},
                       receive
                           {new_state, _, #connection_state{authenticated_state=unauthenticated}} -> 
                               ok;
                           _ ->
                               ?assert(fail)
                       end,
-
-                      Myself ! {tcp_closed, socket}
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 mdtm_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "213 20120203160312\r\n"),
                       meck:expect(memory_server,
                                   file_info,
                                   fun(_, "cheese.txt") ->
@@ -1153,146 +1131,85 @@ mdtm_test() ->
                                            #file_info{type=file, 
                                                       mtime={{2012,2,3},{16,3,12}}}}
                                   end),
-                      Myself ! {tcp, socket, "MDTM cheese.txt"},
-                      receive
-                          {new_state, _, _} -> 
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-
-                      Myself ! {tcp_closed, socket}
+                      login_test_user(ControlPid, [{"MDTM cheese.txt", "213 20120203160312\r\n"}]),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 rnfr_rnto_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "503 RNFR not specified.\r\n"),
-                      Myself ! {tcp, socket, "RNTO mushrooms.txt"},
-                      receive
-                          {new_state, _, _} -> 
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
+                      login_test_user(ControlPid, 
+                                      [{"RNTO mushrooms.txt", "503 RNFR not specified.\r\n"}, 
+                                       {"RNFR cheese.txt", "350 Ready for RNTO.\r\n"}, 
+                                       {"RNTO mushrooms.txt", "250 Rename successful.\r\n"}]),
+                      step(ControlPid),
                       
-                      mock_socket_response(socket, "350 Ready for RNTO.\r\n"),
                       meck:expect(memory_server,
                                   rename_file,
                                   fun(S, "cheese.txt", "mushrooms.txt") ->
                                           {ok, S}
                                   end),
-                      Myself ! {tcp, socket, "RNFR cheese.txt"},
-                      receive
-                          {new_state, _, _} -> 
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-
-                      mock_socket_response(socket, "250 Rename successful.\r\n"),
-                      Myself ! {tcp, socket, "RNTO mushrooms.txt"},
-                      receive
-                          {new_state, _, #connection_state{rnfr=undefined}} -> 
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-
-                      Myself ! {tcp_closed, socket}
+                      step(ControlPid),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 type_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "200 Command okay.\r\n"),
-                      Myself ! {tcp, socket, "TYPE I"},
-                      receive
-                          {new_state, _, _} ->
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-
-                      mock_socket_response(socket, "501 Only TYPE I or TYPE A may be used.\r\n"),
-                      Myself ! {tcp, socket, "TYPE X"},
-                      receive
-                          {new_state, _, _} ->
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-                      
-                      Myself ! {tcp_closed, socket}
+                      login_test_user(ControlPid, 
+                                      [{"TYPE I", "200 Command okay.\r\n"}, 
+                                       {"TYPE X", "501 Only TYPE I or TYPE A may be used.\r\n"}]),
+                      step(ControlPid),
+                      step(ControlPid),
+                      finish(ControlPid)
               end
              ),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 site_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "200 Command okay.\r\n"),
                       meck:expect(memory_server,
                                   site_command,
                                   fun(S, monkey, "cheese bits") ->
                                           {ok, S}
                                   end),
-                      Myself ! {tcp, socket, "SITE MONKEY cheese bits"},
-                      receive
-                          {new_state, _, _} ->
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
+                      login_test_user(ControlPid, 
+                                      [{"SITE MONKEY cheese bits", "200 Command okay.\r\n"},
+                                       {"SITE GORILLA cheese", "500 Syntax error, command unrecognized.\r\n"}]),
+                      step(ControlPid),
 
-                      mock_socket_response(socket, "500 Syntax error, command unrecognized.\r\n"),
                       meck:expect(memory_server,
                                   site_command,
                                   fun(_, gorilla, "cheese") ->
                                           {error, not_found}
                                   end),
-                      Myself ! {tcp, socket, "SITE GORILLA cheese"},
-                      receive
-                          {new_state, _, _} ->
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-                      
-                      Myself ! {tcp_closed, socket}
+                      step(ControlPid),
+                      finish(ControlPid)
               end
              ),
-    ?executeBifrostTest(Child).
+    executeBifrostTest(Child).
 
 unrecognized_command_test() ->
     ?initBifrostTest(),
-    Myself = self(),
+    ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      login_test_user(Myself),
-                      mock_socket_response(socket, "500 Syntax error, command unrecognized.\r\n"),
-                      Myself ! {tcp, socket, "FEED buffalo"},
-                      receive
-                          {new_state, _, _} ->
-                              ok;
-                          _ ->
-                              ?assert(fail)
-                      end,
-                      
-                      Myself ! {tcp_closed, socket}
+                      login_test_user(ControlPid, [{"FEED buffalo", "500 Syntax error, command unrecognized.\r\n"}]),
+                      step(ControlPid),
+                      finish(ControlPid)
               end
              ),
-    ?executeBifrostTest(Child).    
+    executeBifrostTest(Child).    
 
 -endif.
