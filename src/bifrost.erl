@@ -156,7 +156,7 @@ ftp_command(_, Socket, State, user, Arg) ->
     {ok, State#connection_state{user_name=Arg}};
 ftp_command(_, Socket, State, port, Arg) ->
     case parse_address(Arg) of
-        {ok, {Addr, Port} = AddrPort} ->
+        {ok, {Addr, Port}} ->
             respond(Socket, 200),
             {ok, State#connection_state{data_port = {active, Addr, Port}}};
          _ ->
@@ -609,17 +609,6 @@ mock_socket_response(S, R) ->
                         ok
                 end).
 
-expect_responses([]) ->
-    ok;
-expect_responses([[Socket, Content] | Responses]) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S, C) ->
-                        ?assertEqual(Socket, S),
-                        ?assertEqual(Content, unicode:characters_to_list(C)),
-                        expect_responses(Responses)
-                end).
-
 script_dialog([]) -> 
     meck:expect(gen_tcp,
                 recv,
@@ -848,7 +837,7 @@ cdup_test() ->
                                   fun(State, "..") -> {ok, State} end),
                       meck:expect(fake_server,
                                   current_directory,
-                                  fun(State) -> "/meat" end),
+                                  fun(_) -> "/meat" end),
                       login_test_user(ControlPid, 
                                       [{"CDUP", "250 directory changed to \"/meat\"\r\n"}, 
                                        {"CDUP", "250 directory changed to \"/\"\r\n"}, 
@@ -857,13 +846,13 @@ cdup_test() ->
 
                       meck:expect(fake_server,
                                   current_directory,
-                                  fun(State) -> "/" end),
+                                  fun(_) -> "/" end),
 
                       step(ControlPid),
 
                       meck:expect(fake_server,
                                   current_directory,
-                                  fun(State) -> "/" end),
+                                  fun(_) -> "/" end),
                       step(ControlPid),
 
                       finish(ControlPid)
@@ -1220,7 +1209,7 @@ quit_test() ->
               fun () ->
                       meck:expect(fake_server,
                                   disconnect,
-                                  fun(S) ->
+                                  fun(_) ->
                                           ok
                                   end),
                       login_test_user(ControlPid,
