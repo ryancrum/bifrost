@@ -16,7 +16,8 @@
          get_file/2, 
          file_info/2,
          rename_file/3,
-         site_command/3]).
+         site_command/3,
+         disconnect/1]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -74,6 +75,9 @@ change_directory(State, Directory) ->
         _ ->
             {error, State}
     end.
+
+disconnect(_) ->
+    ok.
 
 remove_file(State, File) ->
     Target = absolute_path(State, File),

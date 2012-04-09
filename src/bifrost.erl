@@ -145,8 +145,9 @@ ftp_command(Socket, State, Command, Arg) ->
     Mod = State#connection_state.module,
     ftp_command(Mod, Socket, State, Command, Arg).
 
-ftp_command(_, Socket, _, quit, _) ->
+ftp_command(Mod, Socket, State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
+    Mod:disconnect(State),
     quit;
 ftp_command(_, Socket, State, pasv, _) ->
     pasv_connection(Socket, State);
@@ -1212,4 +1213,21 @@ unrecognized_command_test() ->
              ),
     executeBifrostTest(Child).    
 
+quit_test() ->
+    ?initBifrostTest(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun () ->
+                      meck:expect(memory_server,
+                                  disconnect,
+                                  fun(S) ->
+                                          ok
+                                  end),
+                      login_test_user(ControlPid,
+                                      [{"QUIT", "200 Goodbye.\r\n"}]),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end
+             ),
+    executeBifrostTest(Child).
 -endif.
