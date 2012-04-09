@@ -203,7 +203,7 @@ reading_fun(State, Pos, Bytes) ->
             if Pos >= TotalSize ->
                     {done, State};
                true ->
-                    {ok, Window, reading_fun(Pos + ReadCount, Bytes)}
+                    {ok, Window, reading_fun(State, Pos + ReadCount, Bytes)}
             end
     end.
 
