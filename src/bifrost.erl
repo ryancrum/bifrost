@@ -301,15 +301,17 @@ ftp_command(Mod, Socket, State, site, Arg) ->
 
 ftp_command(Mod, Socket, State, retr, Arg) ->
     DataSocket = data_connection(Socket, State),
-    case Mod:get_file(State, Arg) of
-        {ok, Fun} ->
-            write_fun(DataSocket, Fun),
-            respond(Socket, 226);
-        error ->
-            respond(Socket, 550)            
-    end,
+    Res = case Mod:get_file(State, Arg) of
+              {ok, Fun} ->
+                  {ok, NewState} = write_fun(DataSocket, Fun),
+                  respond(Socket, 226),
+                  {ok, NewState};
+              error ->
+                  respond(Socket, 550),
+                  {ok, State}
+          end,
     gen_tcp:close(DataSocket),
-    {ok, State};
+    Res;
 
 ftp_command(Mod, Socket, State, mdtm, Arg) ->
     case Mod:file_info(State, Arg) of
@@ -368,8 +370,8 @@ write_fun(Socket, Fun) ->
         {ok, Bytes, NextFun} ->
             gen_tcp:send(Socket, Bytes),
             write_fun(Socket, NextFun);
-        done ->
-            ok
+        {done, NewState} ->
+            {ok, NewState}
     end.
 
 strip_newlines(S) ->
@@ -1072,7 +1074,7 @@ retr_test(Mode) ->
                                {resp, socket, "226 Closing data connection.\r\n"}],
                      meck:expect(fake_server,
                                  get_file,
-                                 fun(_, "bologna.txt") ->
+                                 fun(State, "bologna.txt") ->
                                          {ok, 
                                           fun(1024) -> 
                                                   {ok, 
@@ -1080,7 +1082,7 @@ retr_test(Mode) ->
                                                    fun(1024) -> 
                                                            {ok, 
                                                             list_to_binary("SOME MORE DATA"),
-                                                            fun(1024) -> done end}
+                                                            fun(1024) -> {done, State} end}
                                                    end}
                                           end}
                                  end),

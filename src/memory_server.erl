@@ -166,7 +166,7 @@ get_file(State, Path) ->
     Fs = get_fs(ModState),
     case fetch_path(Fs, Target) of
         {file, Contents, _} ->
-            {ok, reading_fun(Contents)};
+            {ok, reading_fun(State, Contents)};
         _ ->
             error
     end.
@@ -193,15 +193,15 @@ read_from_fun(Buffer, Count, Fun) ->
             {ok, Buffer, Count}
     end.
 
-reading_fun(Bytes) ->
-    reading_fun(1, Bytes).
-reading_fun(Pos, Bytes) ->
+reading_fun(State, Bytes) ->
+    reading_fun(State, 1, Bytes).
+reading_fun(State, Pos, Bytes) ->
     TotalSize = length(Bytes),
     fun(ByteCount) ->
             Window = list_to_binary(lists:sublist(Bytes, Pos, ByteCount)),
             ReadCount = size(Window),
             if Pos >= TotalSize ->
-                    done;
+                    {done, State};
                true ->
                     {ok, Window, reading_fun(Pos + ReadCount, Bytes)}
             end
