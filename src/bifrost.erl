@@ -551,21 +551,21 @@ format_port(PortNumber) ->
 % TESTS
 -ifdef(TEST).
 
--define(initBifrostTest(),
-        meck:new(gen_tcp, [unstick]),
-        meck:new(inet, [unstick, passthrough]),
-        meck:new(memory_server, [unstick, passthrough])).
+setup() ->
+    meck:new(gen_tcp, [unstick]),
+    meck:new(inet, [unstick, passthrough]),
+    meck:new(fake_server).
 
-executeBifrostTest(ListenerPid) ->
+execute(ListenerPid) ->
     receive
         go ->
             control_loop(ListenerPid, 
                          ListenerPid, 
                          socket, 
-                         #connection_state{module=memory_server,ip_address={127,0,0,1}}),
-            meck:validate(memory_server),
+                         #connection_state{module=fake_server,ip_address={127,0,0,1}}),
+            meck:validate(fake_server),
             meck:validate(gen_tcp),
-            meck:unload(memory_server),
+            meck:unload(fake_server),
             meck:unload(inet),
             meck:unload(gen_tcp)
     end.
@@ -667,7 +667,7 @@ control_connection_establishment_test() ->
     script_dialog([]),
     ControlPid = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(ControlPid, some_socket, ip, memory_server)
+                               establish_control_connection(ControlPid, some_socket, ip, fake_server)
                        end),
     receive
         {accepted, Child} ->
@@ -695,7 +695,7 @@ login_test_user(SocketPid, Script) ->
     end,
     SocketPid ! {ack, self()},
 
-    meck:expect(memory_server,
+    meck:expect(fake_server,
                 login,
                 fun(St, "meat", "meatmeat") ->
                         {true, authenticate_state(St)}
@@ -718,7 +718,7 @@ finish(Pid) ->
     Pid ! {done, self()}.
 
 authenticate_successful_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
@@ -726,11 +726,11 @@ authenticate_successful_test() ->
                       ControlPid ! {ack, self()},
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 authenticate_failure_test() ->
-    ?initBifrostTest(),
-    meck:expect(memory_server,
+    setup(),
+    meck:expect(fake_server,
                 login,
                 fun(_, "meat", "meatmeat") ->
                         {error}
@@ -752,11 +752,11 @@ authenticate_failure_test() ->
               end),
     script_dialog([{"USER meat", "331 User name okay, need password.\r\n"}, 
                   {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {error, closed} = control_loop(Child, Child, socket, #connection_state{module=memory_server}),
-    meck:validate(memory_server),
+    {error, closed} = control_loop(Child, Child, socket, #connection_state{module=fake_server}),
+    meck:validate(fake_server),
     meck:validate(gen_tcp),
     meck:unload(inet),
-    meck:unload(memory_server),
+    meck:unload(fake_server),
     meck:unload(gen_tcp).
 
 unauthenticated_test() ->
@@ -779,16 +779,16 @@ unauthenticated_test() ->
               end),
     script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"}, 
                   {"MKD /unicorns", "530 Not logged in.\r\n"}]),
-    control_loop(Child, Child, socket, #connection_state{module=memory_server}),
+    control_loop(Child, Child, socket, #connection_state{module=fake_server}),
     meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
 mkdir_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   make_directory,
                                   fun(State, _) ->
                                           {ok, State}
@@ -798,7 +798,7 @@ mkdir_test() ->
                                        {"MKD test_dir_2", "450 Unable to create directory\r\n"}]),
                       step(ControlPid),
 
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   make_directory,
                                   fun(_, _) ->
                                           {error, error}
@@ -807,19 +807,19 @@ mkdir_test() ->
 
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 cwd_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   change_directory,
                                   fun(State, "/meat/bovine/bison") ->
                                           {ok, State}
                                   end),
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(_) -> "/meat/bovine/bison" end),
                       login_test_user(ControlPid, 
@@ -828,7 +828,7 @@ cwd_test() ->
 
                       step(ControlPid),
 
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   change_directory,
                                   fun(State, "/meat/bovine/auroch") ->
                                           {error, State}
@@ -836,17 +836,17 @@ cwd_test() ->
                       step(ControlPid),
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 cdup_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   change_directory,
                                   fun(State, "..") -> {ok, State} end),
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(State) -> "/meat" end),
                       login_test_user(ControlPid, 
@@ -855,27 +855,27 @@ cdup_test() ->
                                        {"CDUP", "250 directory changed to \"/\"\r\n"}]),
                       step(ControlPid),
 
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(State) -> "/" end),
 
                       step(ControlPid),
 
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(State) -> "/" end),
                       step(ControlPid),
 
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 pwd_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(_) -> "/meat/bovine/bison" end),
 
@@ -885,7 +885,7 @@ pwd_test() ->
 
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 login_test_user_with_data_socket(ControlPid, Script, passive) ->
     meck:expect(gen_tcp,
@@ -930,8 +930,8 @@ login_test_user_with_data_socket(ControlPid, Script, active) ->
 
 ?dataSocketTest(nlst_test).
 nlst_test(Mode) ->
-    ?initBifrostTest(),
-    meck:expect(memory_server,
+    setup(),
+    meck:expect(fake_server,
                 list_files,
                 fun(_, _) ->
                         [#file_info{type=file, name="edward"},
@@ -950,12 +950,12 @@ nlst_test(Mode) ->
                       step(ControlPid),
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 ?dataSocketTest(list_test).
 list_test(Mode) ->
-    ?initBifrostTest(),
-    meck:expect(memory_server,
+    setup(),
+    meck:expect(fake_server,
                 list_files,
                 fun(_, _) ->
                         [#file_info{type=file, 
@@ -989,14 +989,14 @@ list_test(Mode) ->
                       step(ControlPid),
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 remove_directory_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
              fun() -> 
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  remove_directory,
                                  fun(St, "/bison/burgers") ->
                                          {ok, St}
@@ -1006,7 +1006,7 @@ remove_directory_test() ->
                                               {"RMD /bison/burgers", "450 Requested file action not taken.\r\n"}]),
                      step(ControlPid),
 
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  remove_directory,
                                  fun(_, "/bison/burgers") ->
                                          {error, error}
@@ -1015,14 +1015,14 @@ remove_directory_test() ->
 
                      finish(ControlPid)
              end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 remove_file_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
              fun() -> 
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  remove_file,
                                  fun(St, "cheese.txt") ->
                                          {ok, St}
@@ -1032,7 +1032,7 @@ remove_file_test() ->
                                               {"DELE cheese.txt", "450 Requested file action not taken.\r\n"}]),
                      step(ControlPid),
 
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  remove_file,
                                  fun(_, "cheese.txt") ->
                                          {error, error}
@@ -1041,11 +1041,11 @@ remove_file_test() ->
                      step(ControlPid),
                      finish(ControlPid)
              end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 ?dataSocketTest(stor_test).
 stor_test(Mode) ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
              fun() ->
@@ -1053,7 +1053,7 @@ stor_test(Mode) ->
                                {req, data_socket, <<"SOME DATA HERE">>},
                                {resp, socket, "226 Closing data connection.\r\n"}
                               ],
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  put_file,
                                  fun(S, "bologna.txt", write, F) ->
                                          {ok, Data, DataSize} = F(1024),
@@ -1069,11 +1069,11 @@ stor_test(Mode) ->
                      step(ControlPid),
                      finish(ControlPid)
              end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 ?dataSocketTest(retr_test).
 retr_test(Mode) ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
              fun() ->
@@ -1081,7 +1081,7 @@ retr_test(Mode) ->
                                {resp, data_socket, "SOME DATA HERE"},
                                {resp, data_socket, "SOME MORE DATA"},
                                {resp, socket, "226 Closing data connection.\r\n"}],
-                     meck:expect(memory_server,
+                     meck:expect(fake_server,
                                  get_file,
                                  fun(_, "bologna.txt") ->
                                          {ok, 
@@ -1101,10 +1101,10 @@ retr_test(Mode) ->
                      step(ControlPid),
                      finish(ControlPid)
              end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 rein_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
@@ -1118,14 +1118,14 @@ rein_test() ->
                       end,
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 mdtm_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   file_info,
                                   fun(_, "cheese.txt") ->
                                           {ok,
@@ -1136,10 +1136,10 @@ mdtm_test() ->
                       step(ControlPid),
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 rnfr_rnto_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
@@ -1149,7 +1149,7 @@ rnfr_rnto_test() ->
                                        {"RNTO mushrooms.txt", "250 Rename successful.\r\n"}]),
                       step(ControlPid),
                       
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   rename_file,
                                   fun(S, "cheese.txt", "mushrooms.txt") ->
                                           {ok, S}
@@ -1158,10 +1158,10 @@ rnfr_rnto_test() ->
                       step(ControlPid),
                       finish(ControlPid)
               end),
-    executeBifrostTest(Child).
+    execute(Child).
 
 type_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
@@ -1173,14 +1173,14 @@ type_test() ->
                       finish(ControlPid)
               end
              ),
-    executeBifrostTest(Child).
+    execute(Child).
 
 site_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   site_command,
                                   fun(S, monkey, "cheese bits") ->
                                           {ok, S}
@@ -1190,7 +1190,7 @@ site_test() ->
                                        {"SITE GORILLA cheese", "500 Syntax error, command unrecognized.\r\n"}]),
                       step(ControlPid),
 
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   site_command,
                                   fun(_, gorilla, "cheese") ->
                                           {error, not_found}
@@ -1199,10 +1199,10 @@ site_test() ->
                       finish(ControlPid)
               end
              ),
-    executeBifrostTest(Child).
+    execute(Child).
 
 unrecognized_command_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
@@ -1211,14 +1211,14 @@ unrecognized_command_test() ->
                       finish(ControlPid)
               end
              ),
-    executeBifrostTest(Child).    
+    execute(Child).    
 
 quit_test() ->
-    ?initBifrostTest(),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun () ->
-                      meck:expect(memory_server,
+                      meck:expect(fake_server,
                                   disconnect,
                                   fun(S) ->
                                           ok
@@ -1229,5 +1229,5 @@ quit_test() ->
                       finish(ControlPid)
               end
              ),
-    executeBifrostTest(Child).
+    execute(Child).
 -endif.
