@@ -17,6 +17,7 @@
          file_info/2,
          rename_file/3,
          site_command/3,
+         site_help/1,
          disconnect/1]).
 
 -ifdef(debug).
@@ -208,6 +209,9 @@ reading_fun(State, Pos, Bytes) ->
     end.
 
 site_command(_, _, _) ->
+    {error, not_found}.
+
+site_help(_) ->
     {error, not_found}.
 
 %% priv
