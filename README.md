@@ -8,7 +8,7 @@ Pluggable Erlang FTP Server
 >             wanted to go."
 >  -- from the Gylfaginning (Snorri Sturluson)
 
-### Warning: Bifrost is still in very early active development, is not yet documented and the interface is prone to be subject to dramatic changes. There is one known production implementation of bifrost, however, so is complete enough to work.
+### Warning: Bifrost is still in very early active development, is not yet documented and the interface is prone to be subject to dramatic changes.
 
 ## TODO
 
