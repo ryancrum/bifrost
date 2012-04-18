@@ -27,6 +27,7 @@ Create a module with the `gen_bifrost_server` behaviour and implement all of the
 In your application supervisor add a bifrost child:
 
 `my_supervisor.erl`
+
 ```erlang
 init([]) ->
   GenBifrostServerModule = some_module,
