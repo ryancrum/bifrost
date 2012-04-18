@@ -8,7 +8,40 @@ Pluggable Erlang FTP Server
 >             wanted to go."
 >  -- from the Gylfaginning (Snorri Sturluson)
 
-### Bifrost is in very early active development -- not yet fully functional, fully tested and certainly not yet documented. It could be accurately described as a bunch of source files.
+### Warning: Bifrost is still in very early active development, is not yet documented and the interface is prone to be subject to dramatic changes. There is one known production implementation of bifrost, however, so is complete enough to work.
+
+## TODO
+
+- Document interface
+- Implement FTP/SSL (see `ssl` branch for current work on this)
+- Include real erlang application with included supervisor, not just a gen_server.
+
+## Description
+Bifrost is a server implementation of the FTP protocol that allows you to define your own backend (i.e. a filesystem, webservice, etc.).
+
+## Usage
+
+See `memory_server.erl`, a somewhat-feature-complete-but-completely-useless in-memory FTP server for an example implementation.
+
+Create a module with the `gen_bifrost_server` behaviour and implement all of the callbacks. memory_server will have to suffice for documentation until the bifrost interface is firmed up. Sorry.
+In your application supervisor add a bifrost child:
+
+`my_supervisor.erl`
+```erlang
+init([]) ->
+  GenBifrostServerModule = some_module,
+  ExternalIpAddress = {127,0,0,1},
+  Port = 21,
+  {ok, { {one_for_one, 5, 10},
+         [{bifrost,
+           {bifrost,
+            start_link,
+            [GenBifrostServerModule, ExternalIpAddress, Port]},
+           permanent,
+           5000,
+           worker,
+           [bifrost]}]}}.
+```
 
 ## License
 
