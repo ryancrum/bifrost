@@ -9,7 +9,13 @@
           ip_address = undefined,
           rnfr = undefined,
           module,
-          module_state
+          module_state,
+          ssl_allowed = false,
+          ssl_cert = undefined,
+          protection_mode = clear, % can also be `private'
+          pb_size = 0,
+          control_socket = undefined,
+          ssl_socket = undefined
          }).
 
 -record(file_info,

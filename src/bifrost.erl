@@ -5,20 +5,31 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/3, establish_control_connection/4, await_connections/3]).
+-export([start_link/3, establish_control_connection/5, await_connections/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
-start_link(HookModule, IpAddress, Port) ->
-    gen_server:start_link(?MODULE, [HookModule, IpAddress, Port], []).
+default(Expr, Default) ->
+    case Expr of
+        undefined ->
+            Default;
+        _ ->
+            Expr
+    end.
 
-init([HookModule, IpAddress, Port]) ->
+start_link(HookModule, IpAddress, Opts) ->
+    gen_server:start_link(?MODULE, [HookModule, IpAddress, Opts], []).
+
+init([HookModule, IpAddress, Opts]) ->
+    Port = default(proplists:get_value(port, Opts), 21),
+    Ssl = default(proplists:get_value(ssl, Opts), false),
+    SslCert = proplists:get_value(ssl_cert, Opts),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, IpAddress, HookModule]),
+                                [Listen, IpAddress, HookModule, {ssl, Ssl, SslCert}]),
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
@@ -45,28 +56,33 @@ code_change(_OldVsn, State, _Extra) ->
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
 
-await_connections(Listen, IpAddress, Mod) ->
+await_connections(Listen, IpAddress, Mod, SslOpts) ->
     proc_lib:spawn_link(?MODULE,
                         establish_control_connection,
-                        [self(), Listen, IpAddress, Mod]),
+                        [self(), Listen, IpAddress, Mod, SslOpts]),
     receive
-        {accepted, _ChildPid} -> await_connections(Listen, IpAddress, Mod);
-        _ -> await_connections(Listen, IpAddress, Mod)
+        _ -> await_connections(Listen, IpAddress, Mod, SslOpts)
     end.
 
-establish_control_connection(SrvPid, Listen, IpAddress, Mod) ->
+establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, CertFile}) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
-            io:format("CONNECTION ESTABLISHED: ~p~n", [inet:sockname(Socket)]),
             SrvPid ! {accepted, self()},
-            respond(Socket, 220, "FTP Server Ready"),
-            control_loop(SrvPid, none, Socket, #connection_state{module=Mod, ip_address=IpAddress});
+            respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
+            control_loop(SrvPid, 
+                         none, 
+                         {gen_tcp, Socket}, 
+                         #connection_state{module=Mod, 
+                                           ip_address=IpAddress,
+                                           control_socket=Socket,
+                                           ssl_allowed=SslAllowed, 
+                                           ssl_cert=CertFile});
         _Error ->
             exit(bad_accept)
     end.
 
-control_loop(SrvPid, HookPid, Socket, State) ->
-    case gen_tcp:recv(Socket, 0) of
+control_loop(SrvPid, HookPid, {SocketMod, RawSocket} = Socket, State) ->
+    case SocketMod:recv(RawSocket, 0) of
         {ok, Input} ->
             {Command, Arg} = parse_input(Input),
             case ftp_command(Socket, State, Command, Arg) of
@@ -82,6 +98,8 @@ control_loop(SrvPid, HookPid, Socket, State) ->
                        true ->
                             control_loop(SrvPid, HookPid, Socket, NewState)
                     end;
+                {new_socket, NewState, NewSock} ->
+                    control_loop(SrvPid, HookPid, NewSock, NewState);
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
                     {error, timeout};
@@ -97,16 +115,26 @@ control_loop(SrvPid, HookPid, Socket, State) ->
 respond(Socket, ResponseCode) ->
     respond(Socket, ResponseCode, response_code_string(ResponseCode)).
 
-respond(Socket, ResponseCode, Message) ->
+respond({SocketMod, Socket}, ResponseCode, Message) ->
     Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
-    gen_tcp:send(Socket, 
-                 Line).
+    SocketMod:send(Socket, Line).
 
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
         {ok, DataSocket} ->
-            DataSocket;
+            case State#connection_state.protection_mode of
+                clear ->
+                    {gen_tcp, DataSocket};
+                private ->
+                    case ssl:ssl_accept(DataSocket, [{cacertfile, State#connection_state.ssl_cert}]) of
+                        {ok, SslSocket} ->
+                            {ssl, SslSocket};
+                        _ ->
+                            respond(ControlSocket, 425, "Can't open data connection."),
+                            throw(error)
+                    end
+            end;
         {error, Error} ->
             respond(ControlSocket, 425, "Can't open data connection"),
             throw(Error)
@@ -149,11 +177,43 @@ ftp_command(Mod, Socket, State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
     Mod:disconnect(State),
     quit;
+
 ftp_command(_, Socket, State, pasv, _) ->
     pasv_connection(Socket, State);
+
+ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
+    if State#connection_state.ssl_allowed =:= false ->
+            respond(Socket, 500);
+       true ->
+            case string:to_lower(Arg) of
+                "tls" ->
+                    respond(Socket, 234, "Command okay."),
+                    case ssl:ssl_accept(RawSocket, [{cacertfile, State#connection_state.ssl_cert}]) of
+                        {ok, SslSocket} ->
+                            {new_socket, 
+                             State#connection_state{ssl_socket=SslSocket},
+                             {ssl, SslSocket}};
+                        _ ->
+                            {error, error}
+                    end;
+                _ ->
+                    respond(Socket, 502, "Unsupported security extension."),
+                    {ok, State}
+            end
+    end;
+
+ftp_command(_, Socket, State, prot, Arg) ->
+    ProtMode = case string:to_lower(Arg) of
+                   "c" -> clear;
+                   _ -> private
+               end,
+    respond(Socket, 200),
+    {ok, State#connection_state{protection_mode=ProtMode}};
+
 ftp_command(_, Socket, State, user, Arg) ->
     respond(Socket, 331),
     {ok, State#connection_state{user_name=Arg}};
+
 ftp_command(_, Socket, State, port, Arg) ->
     case parse_address(Arg) of
         {ok, {Addr, Port}} ->
@@ -162,6 +222,7 @@ ftp_command(_, Socket, State, port, Arg) ->
          _ ->
             respond(Socket, 452, "Error parsing address.")
         end;
+
 ftp_command(Mod, Socket, State, pass, Arg) ->
     case Mod:login(State, State#connection_state.user_name, Arg) of
         {true, NewState} -> 
@@ -218,7 +279,7 @@ ftp_command(Mod, Socket, State, nlst, Arg) ->
             DataSocket = data_connection(Socket, State),
             list_file_names_to_socket(DataSocket, Files),
             respond(Socket, 226),
-            gen_tcp:close(DataSocket),
+            bf_close(DataSocket),
             {ok, State}
     end;
 
@@ -231,7 +292,7 @@ ftp_command(Mod, Socket, State, list, Arg) ->
             DataSocket = data_connection(Socket, State),
             list_files_to_socket(DataSocket, Files),
             respond(Socket, 226),
-            gen_tcp:close(DataSocket),
+            bf_close(DataSocket),
             {ok, State}
     end;
 
@@ -262,7 +323,7 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
 ftp_command(Mod, Socket, State, stor, Arg) ->
     DataSocket = data_connection(Socket, State),
     Fun = fun(_) ->
-                  case gen_tcp:recv(DataSocket, 0) of
+                  case bf_recv(DataSocket, 0) of
                       {ok, Data} ->
                           {ok, Data, size(Data)};
                       {error, closed} ->
@@ -271,7 +332,7 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
           end,
     {ok, NewState} = Mod:put_file(State, Arg, write, Fun),
     respond(Socket, 226),
-    gen_tcp:close(DataSocket),
+    bf_close(DataSocket),
     {ok, NewState};
 
 ftp_command(_, Socket, State, type, Arg) ->
@@ -310,7 +371,7 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
                   respond(Socket, 550),
                   {ok, State}
           end,
-    gen_tcp:close(DataSocket),
+    bf_close(DataSocket),
     Res;
 
 ftp_command(Mod, Socket, State, mdtm, Arg) ->
@@ -368,7 +429,7 @@ ftp_command(_, Socket, State, Command, _) ->
 write_fun(Socket, Fun) ->
     case Fun(1024) of 
         {ok, Bytes, NextFun} ->
-            gen_tcp:send(Socket, Bytes),
+            bf_send(Socket, Bytes),
             write_fun(Socket, NextFun);
         {done, NewState} ->
             {ok, NewState}
@@ -388,17 +449,26 @@ parse_input(Input) ->
 
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) -> 
-                      gen_tcp:send(DataSocket, 
-                                   file_info_to_string(Info) ++ "\r\n") end,
+                      bf_send(DataSocket, 
+                              file_info_to_string(Info) ++ "\r\n") end,
               Files),
     ok.
 
 list_file_names_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) -> 
-                      gen_tcp:send(DataSocket, 
-                                   Info#file_info.name ++ "\r\n") end,
+                      bf_send(DataSocket, 
+                              Info#file_info.name ++ "\r\n") end,
               Files),
     ok.
+
+bf_send({SockMod, Socket}, Data) ->
+    SockMod:send(Socket, Data).
+
+bf_close({_, Socket}) ->
+    gen_tcp:close(Socket).
+
+bf_recv({SockMod, Socket}, Count) ->
+    SockMod:recv(Socket, Count).
 
 %% OUTPUT FORMATTING
 %% Some of this formatting code has been shamelessly/fully 
@@ -563,7 +633,7 @@ execute(ListenerPid) ->
         go ->
             control_loop(ListenerPid, 
                          ListenerPid, 
-                         socket, 
+                         {gen_tcp, socket}, 
                          #connection_state{module=fake_server,ip_address={127,0,0,1}}),
             meck:validate(fake_server),
             meck:validate(gen_tcp),
@@ -658,7 +728,7 @@ control_connection_establishment_test() ->
     script_dialog([]),
     ControlPid = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(ControlPid, some_socket, ip, fake_server)
+                               establish_control_connection(ControlPid, some_socket, ip, fake_server, {ssl, false, undefined})
                        end),
     receive
         {accepted, Child} ->
@@ -743,7 +813,7 @@ authenticate_failure_test() ->
               end),
     script_dialog([{"USER meat", "331 User name okay, need password.\r\n"}, 
                   {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {error, closed} = control_loop(Child, Child, socket, #connection_state{module=fake_server}),
+    {error, closed} = control_loop(Child, Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
     meck:validate(fake_server),
     meck:validate(gen_tcp),
     meck:unload(inet),
@@ -770,7 +840,7 @@ unauthenticated_test() ->
               end),
     script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"}, 
                   {"MKD /unicorns", "530 Not logged in.\r\n"}]),
-    control_loop(Child, Child, socket, #connection_state{module=fake_server}),
+    control_loop(Child, Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
     meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
