@@ -266,7 +266,8 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
             {error, closed}
      end;
 
-%% from this point on every command requires authentication
+%% ^^^ from this point down every command requires authentication ^^^
+
 ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _) ->
     respond(Socket, 530),
     {ok, State};
@@ -529,12 +530,9 @@ bf_close({SockMod, Socket}) ->
 bf_recv({SockMod, Socket}, Count) ->
     SockMod:recv(Socket, Count).
 
-%% OUTPUT FORMATTING
-%% Some of this formatting code has been shamelessly/fully 
-%% yanked from jungerl/ftpd.erl
-%% FTP code strings 
-response_code_string(110) -> "MARK yyyy = mmmm";             %% ARGS
-response_code_string(120) -> "Service ready in nnn minutes.";  %% ARG
+%% Adapted from jungerl/ftpd.erl
+response_code_string(110) -> "MARK yyyy = mmmm";
+response_code_string(120) -> "Service ready in nnn minutes.";
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
 response_code_string(150) -> "File status okay; about to open data connection.";
 response_code_string(200) -> "Command okay.";
@@ -542,16 +540,16 @@ response_code_string(202) -> "Command not implemented, superfluous at this site.
 response_code_string(211) -> "System status, or system help reply.";
 response_code_string(212) -> "Directory status.";
 response_code_string(213) -> "File status.";
-response_code_string(214) -> "Help message.";     %% ADD HELP
-response_code_string(215) -> "UNIX system type";  %% set NAME
+response_code_string(214) -> "Help message.";
+response_code_string(215) -> "UNIX system type";
 response_code_string(220) -> "Service ready for user.";
 response_code_string(221) -> "Service closing control connection.";
 response_code_string(225) -> "Data connection open; no transfere in progress";    
-response_code_string(226) -> "Closing data connection.";  %% ADD INFO
-response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2).";  %% ARGS
+response_code_string(226) -> "Closing data connection.";
+response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2).";
 response_code_string(230) -> "User logged in, proceed.";
 response_code_string(250) -> "Requested file action okay, completed.";
-response_code_string(257) -> "PATHNAME created.";  %% ARG
+response_code_string(257) -> "PATHNAME created.";
 response_code_string(331) -> "User name okay, need password.";
 response_code_string(332) -> "Need account for login.";
 response_code_string(350) -> "Requested file action pending further information.";
