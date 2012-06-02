@@ -47,10 +47,10 @@ init([]) ->
 
 Bifrost includes implicit FTP/SSL support. To use this functionality, just add some additional startup options to the start_link call.
 
-`ssl` should be `true`.
-`ssl_key` should be the path to the PEM-encoded private key file.
-`ssl_cert` should be the path to the PEM-encoded certificate file.
-`ssl_ca_cert` should be the path to the CA's PEM-encoded certificate file.
+- `ssl` should be `true`.
+- `ssl_key` should be the path to the PEM-encoded private key file.
+- `ssl_cert` should be the path to the PEM-encoded certificate file.
+- `ssl_ca_cert` should be the path to the CA's PEM-encoded certificate file.
 
 ## License
 
