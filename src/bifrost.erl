@@ -156,14 +156,20 @@ data_connection(ControlSocket, State) ->
             throw(Error)
     end.
 
+
+% passive -- accepts an inbound connection
 establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
     gen_tcp:accept(Listen);
+
+% active -- establishes an outbound connection
 establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
     gen_tcp:connect(Addr, Port, [{active, false}, binary]).
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
         {passive, PasvListen, _} ->
+            % We should only have one passive socket open at a time, so close the current one
+            % and open a new one.
             gen_tcp:close(PasvListen),
             pasv_connection(ControlSocket, State#connection_state{pasv_listen=undefined});
         undefined ->
