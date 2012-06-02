@@ -147,12 +147,12 @@ data_connection(ControlSocket, State) ->
                         {ok, SslSocket} ->
                             {ssl, SslSocket};
                         E ->
-                            respond(ControlSocket, 425, "Can't open data connection."),
+                            respond(ControlSocket, 425),
                             throw({error, E})
                     end
             end;
         {error, Error} ->
-            respond(ControlSocket, 425, "Can't open data connection"),
+            respond(ControlSocket, 425),
             throw(Error)
     end.
 
@@ -190,8 +190,9 @@ pasv_connection(ControlSocket, State) ->
                     
                     {ok,
                      State#connection_state{pasv_listen=PasvSocketInfo}};
-                {error, Error} ->
-                    {error, Error}
+                {error, _} ->
+                    respond(ControlSocket, 425),
+                    {ok, State}
             end
     end.
 
@@ -211,7 +212,8 @@ ftp_command(_, Socket, State, pasv, _) ->
 
 ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
     if State#connection_state.ssl_allowed =:= false ->
-            respond(Socket, 500);
+            respond(Socket, 500),
+            {ok, State};
        true ->
             case string:to_lower(Arg) of
                 "tls" ->
@@ -222,8 +224,9 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
                             {new_socket, 
                              State#connection_state{ssl_socket=SslSocket},
                              {ssl, SslSocket}};
-                        E ->
-                            {error, E}
+                        _ ->
+                            respond(Socket, 500),
+                            {ok, State}
                     end;
                 _ ->
                     respond(Socket, 502, "Unsupported security extension."),
