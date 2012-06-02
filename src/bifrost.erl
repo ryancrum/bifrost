@@ -126,8 +126,8 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
     Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
     SocketMod:send(Socket, Line).
 
-respond_raw(Socket, Line) ->
-    gen_tcp:send(Socket, Line ++ "\r\n").
+respond_raw({SocketMod, Socket}, Line) ->
+    SocketMod:send(Socket, Line ++ "\r\n").
 
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
