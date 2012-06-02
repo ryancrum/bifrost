@@ -126,6 +126,9 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
     Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
     SocketMod:send(Socket, Line).
 
+respond_raw(Socket, Line) ->
+    gen_tcp:send(Socket, Line ++ "\r\n").
+
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
@@ -380,6 +383,32 @@ ftp_command(Mod, Socket, State, site, Arg) ->
             {ok, State};
         {error, _} ->
             respond(Socket, 501, "Error completing command."),
+            {ok, State}
+    end;
+
+ftp_command(Mod, Socket, State, site_help, _) ->
+    case Mod:site_help(State) of
+        {ok, []} ->
+            respond(Socket, 500);
+        {error, _} ->
+            respond(Socket, 500);
+        {ok, Commands} ->
+            respond_raw(Socket, "214-The following commands are recognized"),
+            lists:map(fun({CmdName, Descr}) ->
+                              respond_raw(Socket, CmdName ++ " : " ++ Descr)
+                      end,
+                      Commands),
+            respond(Socket, 214, "Help OK")
+    end,
+    {ok, State};
+
+ftp_command(Mod, Socket, State, help, Arg) ->
+    LowerArg =  string:to_lower(Arg),
+    case LowerArg of
+        "site" ->
+            ftp_command(Mod, Socket, State, site_help, undefined);
+        _ ->
+            respond(Socket, 500),
             {ok, State}
     end;
 
@@ -1279,6 +1308,26 @@ site_test() ->
                                   fun(_, gorilla, "cheese") ->
                                           {error, not_found}
                                   end),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end
+             ),
+    execute(Child).
+
+help_site_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+                      meck:expect(fake_server,
+                                  site_help,
+                                  fun (_) ->
+                                          {ok, [{"MEAT", "devour the flesh of beasts."}]}
+                                  end),
+                      Script = [{"HELP SITE", "214-The following commands are recognized\r\n"},
+                                {resp, socket, "MEAT : devour the flesh of beasts.\r\n"},
+                                {resp, socket, "214 Help OK\r\n"}],
+                      login_test_user(ControlPid, Script),
                       step(ControlPid),
                       finish(ControlPid)
               end

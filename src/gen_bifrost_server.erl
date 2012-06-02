@@ -15,6 +15,7 @@ behaviour_info(callbacks) ->
      {file_info, 2},
      {rename_file, 3},
      {site_command, 3},
+     {site_help, 1},
      {disconnect, 1}];
 behaviour_info(_) ->
     undefined.
