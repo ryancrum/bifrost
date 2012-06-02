@@ -13,11 +13,10 @@ Pluggable Erlang FTP Server
 ## TODO
 
 - Document interface
-- Implement FTP/SSL (see `ssl` branch for current work on this)
 - Include real erlang application with included supervisor, not just a gen_server.
 
 ## Description
-Bifrost is a server implementation of the FTP protocol that allows you to define your own backend (i.e. a filesystem, webservice, etc.).
+Bifrost is a server implementation of the FTP protocol that allows you to define your own backend (i.e. a filesystem, webservice, etc.). It includes implicit FTP/SSL support.
 
 ## Usage
 
@@ -37,12 +36,21 @@ init([]) ->
          [{bifrost,
            {bifrost,
             start_link,
-            [GenBifrostServerModule, ExternalIpAddress, Port]},
+            [GenBifrostServerModule, ExternalIpAddress, [{port, Port}]]},
            permanent,
            5000,
            worker,
            [bifrost]}]}}.
 ```
+
+### SSL
+
+Bifrost includes implicit FTP/SSL support. To use this functionality, just add some additional startup options to the start_link call.
+
+`ssl` should be `true`.
+`ssl_key` should be the path to the PEM-encoded private key file.
+`ssl_cert` should be the path to the PEM-encoded certificate file.
+`ssl_ca_cert` should be the path to the CA's PEM-encoded certificate file.
 
 ## License
 
