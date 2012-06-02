@@ -129,6 +129,11 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
 respond_raw({SocketMod, Socket}, Line) ->
     SocketMod:send(Socket, Line ++ "\r\n").
 
+ssl_options(State) ->
+    [{keyfile, State#connection_state.ssl_key},
+     {certfile, State#connection_state.ssl_cert}, 
+     {cacertfile, State#connection_state.ssl_ca_cert}].
+
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
@@ -138,9 +143,7 @@ data_connection(ControlSocket, State) ->
                     {gen_tcp, DataSocket};
                 private ->
                     case ssl:ssl_accept(DataSocket, 
-                                        [{keyfile, State#connection_state.ssl_key},
-                                         {certfile, State#connection_state.ssl_cert}, 
-                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
+                                        ssl_options(State)) of
                         {ok, SslSocket} ->
                             {ssl, SslSocket};
                         E ->
@@ -208,9 +211,7 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
                 "tls" ->
                     respond(Socket, 234, "Command okay."),
                     case ssl:ssl_accept(RawSocket, 
-                                        [{keyfile, State#connection_state.ssl_key},
-                                         {certfile, State#connection_state.ssl_cert}, 
-                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
+                                        ssl_options(State)) of
                         {ok, SslSocket} ->
                             {new_socket, 
                              State#connection_state{ssl_socket=SslSocket},
