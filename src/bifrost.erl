@@ -530,7 +530,7 @@ bf_close({SockMod, Socket}) ->
 bf_recv({SockMod, Socket}, Count) ->
     SockMod:recv(Socket, Count).
 
-%% Adapted from jungerl/ftpd.erl
+% Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
 response_code_string(120) -> "Service ready in nnn minutes.";
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
@@ -572,7 +572,8 @@ response_code_string(552) -> "Requested file action aborted.";
 response_code_string(553) -> "Requested action not taken.";
 response_code_string(_) -> "N/A".
 
-% printing functions ripped from jungerl/ftpd
+% Taken from jungerl/ftpd
+
 file_info_to_string(Info) ->
     format_type(Info#file_info.type) ++
         format_access(Info#file_info.mode) ++ " " ++
@@ -648,10 +649,10 @@ month(10) -> "Oct";
 month(11) -> "Nov";
 month(12) -> "Dec".
 
-%% parse address on form:
-%% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
-%% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
-%%
+% parse address on form:
+% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
+% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
+% Taken from jungerl/ftpd
 parse_address(Str) ->
     paddr(Str, 0, []).
 
@@ -677,8 +678,11 @@ format_port(PortNumber) ->
     [A,B] = binary_to_list(<<PortNumber:16>>),
     {A, B}.
 
-% TESTS
 -ifdef(TEST).
+
+%% EUNIT TESTS %%
+
+% Testing Utility Functions %
 
 setup() ->
     meck:new(gen_tcp, [unstick]),
@@ -704,30 +708,6 @@ execute(ListenerPid) ->
                TEST_NAME(active),
                TEST_NAME(passive)).
 
-strip_newlines_test() ->
-    "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
-    "testing again" = strip_newlines("testing again").
-
-parse_input_test() ->
-    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
-    {test, ""} = parse_input("Test\r\n"),
-    {test, "awesome"} = parse_input("Test awesome\r\n").
-
-format_access_test() ->
-    "rwxrwxrwx" = format_access(8#0777),
-    "rw-rw-rw-" = format_access(8#0666),
-    "r--rwxrwx" = format_access(8#0477),
-    "---------" = format_access(0).
-
-format_number_test() ->
-    "005" = format_number(5, 3, $0),
-    "500" = format_number(500, 2, $0),
-    "500" = format_number(500, 3, $0).
-
-parse_address_test() ->
-    {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
-    error = parse_address("MEAT MEAT").
-
 mock_socket_response(S, R) ->
     meck:expect(gen_tcp,
                 send,
@@ -738,7 +718,8 @@ mock_socket_response(S, R) ->
                         ok
                 end).
 
-script_dialog([]) -> 
+% Awkward, monadic interaction sequence testing
+script_dialog([]) ->
     meck:expect(gen_tcp,
                 recv,
                 fun(_, _) -> {error, closed} end);
@@ -774,7 +755,49 @@ script_dialog([{req, Socket, Request} | Rest]) ->
                         {ok, Request}
                 end).
 
-% FUNCTIONAL TESTS
+% executes the next step in the test script
+step(Pid) ->
+    Pid ! {ack, self()},
+    receive 
+        {new_state, _, _} ->
+            ok;
+        _ ->
+            ?assert(fail)
+    end.
+
+% stops the script
+finish(Pid) ->
+    Pid ! {done, self()}.
+
+
+% Unit Tests %
+
+strip_newlines_test() ->
+    "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
+    "testing again" = strip_newlines("testing again").
+
+parse_input_test() ->
+    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
+    {test, ""} = parse_input("Test\r\n"),
+    {test, "awesome"} = parse_input("Test awesome\r\n").
+
+format_access_test() ->
+    "rwxrwxrwx" = format_access(8#0777),
+    "rw-rw-rw-" = format_access(8#0666),
+    "r--rwxrwx" = format_access(8#0477),
+    "---------" = format_access(0).
+
+format_number_test() ->
+    "005" = format_number(5, 3, $0),
+    "500" = format_number(500, 2, $0),
+    "500" = format_number(500, 3, $0).
+
+parse_address_test() ->
+    {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
+    error = parse_address("MEAT MEAT").
+
+
+% Functional/Integration Tests %
 
 control_connection_establishment_test() ->
     meck:new(gen_tcp, [unstick]),
@@ -822,18 +845,6 @@ login_test_user(SocketPid, Script) ->
         {new_state, _, _} ->
             ok
     end.
-
-step(Pid) ->
-    Pid ! {ack, self()},
-    receive 
-        {new_state, _, _} ->
-            ok;
-        _ ->
-            ?assert(fail)
-    end.
-
-finish(Pid) ->
-    Pid ! {done, self()}.
 
 authenticate_successful_test() ->
     setup(),
@@ -1368,4 +1379,5 @@ quit_test() ->
               end
              ),
     execute(Child).
+
 -endif.
