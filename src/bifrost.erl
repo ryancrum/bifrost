@@ -24,12 +24,17 @@ start_link(HookModule, IpAddress, Opts) ->
 init([HookModule, IpAddress, Opts]) ->
     Port = default(proplists:get_value(port, Opts), 21),
     Ssl = default(proplists:get_value(ssl, Opts), false),
+    SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
+    CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, IpAddress, HookModule, {ssl, Ssl, SslCert}]),
+                                [Listen, 
+                                 IpAddress, 
+                                 HookModule, 
+                                 {ssl, Ssl, SslKey, SslCert, CaSslCert}]),
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
@@ -64,7 +69,7 @@ await_connections(Listen, IpAddress, Mod, SslOpts) ->
         _ -> await_connections(Listen, IpAddress, Mod, SslOpts)
     end.
 
-establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, CertFile}) ->
+establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, KeyFile, CertFile, CaCertFile}) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
             SrvPid ! {accepted, self()},
@@ -75,8 +80,10 @@ establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, C
                          #connection_state{module=Mod, 
                                            ip_address=IpAddress,
                                            control_socket=Socket,
-                                           ssl_allowed=SslAllowed, 
-                                           ssl_cert=CertFile});
+                                           ssl_allowed=SslAllowed,
+                                           ssl_key=KeyFile,
+                                           ssl_cert=CertFile,
+                                           ssl_ca_cert=CaCertFile});
         _Error ->
             exit(bad_accept)
     end.
@@ -109,7 +116,7 @@ control_loop(SrvPid, HookPid, {SocketMod, RawSocket} = Socket, State) ->
                     {ok, quit}
             end;
         {error, _Reason} ->
-            io:format("DONE BRO~n")
+            io:format("Connection Terminated~n")
     end.
 
 respond(Socket, ResponseCode) ->
@@ -127,12 +134,15 @@ data_connection(ControlSocket, State) ->
                 clear ->
                     {gen_tcp, DataSocket};
                 private ->
-                    case ssl:ssl_accept(DataSocket, [{cacertfile, State#connection_state.ssl_cert}]) of
+                    case ssl:ssl_accept(DataSocket, 
+                                        [{keyfile, State#connection_state.ssl_key},
+                                         {certfile, State#connection_state.ssl_cert}, 
+                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
                         {ok, SslSocket} ->
                             {ssl, SslSocket};
-                        _ ->
+                        E ->
                             respond(ControlSocket, 425, "Can't open data connection."),
-                            throw(error)
+                            throw({error, E})
                     end
             end;
         {error, Error} ->
@@ -147,21 +157,27 @@ establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
-        {passive, _, {{S1,S2,S3,S4}, P}} ->
-            {P1,P2} = format_port(P),
-            respond(ControlSocket,
-                    227, 
-                    lists:flatten(
-                      io_lib:format("Entering Passive Mode (~p,~p,~p,~p,~p,~p)",
-                                    [S1,S2,S3,S4,P1,P2]))),
-                     {ok, State};
+        {passive, PasvListen, _} ->
+            gen_tcp:close(PasvListen),
+            pasv_connection(ControlSocket, State#connection_state{pasv_listen=undefined});
         undefined ->
             case listen_socket(0, [{active, false}, binary]) of
                 {ok, Listen} ->
                     {ok, {_, Port}} = inet:sockname(Listen),
-                    PasvSocketInfo = {passive, Listen, {State#connection_state.ip_address, Port}},
-                    pasv_connection(ControlSocket,
-                                    State#connection_state{pasv_listen=PasvSocketInfo});
+                    Ip = State#connection_state.ip_address,
+                    PasvSocketInfo = {passive, 
+                                      Listen, 
+                                      {Ip, Port}},
+                    {P1,P2} = format_port(Port),
+                    {S1,S2,S3,S4} = Ip,
+                    respond(ControlSocket,
+                            227, 
+                            lists:flatten(
+                              io_lib:format("Entering Passive Mode (~p,~p,~p,~p,~p,~p)",
+                                            [S1,S2,S3,S4,P1,P2]))),
+                    
+                    {ok,
+                     State#connection_state{pasv_listen=PasvSocketInfo}};
                 {error, Error} ->
                     {error, Error}
             end
@@ -188,13 +204,16 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
             case string:to_lower(Arg) of
                 "tls" ->
                     respond(Socket, 234, "Command okay."),
-                    case ssl:ssl_accept(RawSocket, [{cacertfile, State#connection_state.ssl_cert}]) of
+                    case ssl:ssl_accept(RawSocket, 
+                                        [{keyfile, State#connection_state.ssl_key},
+                                         {certfile, State#connection_state.ssl_cert}, 
+                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
                         {ok, SslSocket} ->
                             {new_socket, 
                              State#connection_state{ssl_socket=SslSocket},
                              {ssl, SslSocket}};
-                        _ ->
-                            {error, error}
+                        E ->
+                            {error, E}
                     end;
                 _ ->
                     respond(Socket, 502, "Unsupported security extension."),
@@ -209,6 +228,10 @@ ftp_command(_, Socket, State, prot, Arg) ->
                end,
     respond(Socket, 200),
     {ok, State#connection_state{protection_mode=ProtMode}};
+
+ftp_command(_, Socket, State, pbsz, "0") ->
+    respond(Socket, 200),
+    {ok, State};
 
 ftp_command(_, Socket, State, user, Arg) ->
     respond(Socket, 331),
@@ -464,8 +487,8 @@ list_file_names_to_socket(DataSocket, Files) ->
 bf_send({SockMod, Socket}, Data) ->
     SockMod:send(Socket, Data).
 
-bf_close({_, Socket}) ->
-    gen_tcp:close(Socket).
+bf_close({SockMod, Socket}) ->
+    SockMod:close(Socket).
 
 bf_recv({SockMod, Socket}, Count) ->
     SockMod:recv(Socket, Count).
@@ -728,7 +751,7 @@ control_connection_establishment_test() ->
     script_dialog([]),
     ControlPid = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(ControlPid, some_socket, ip, fake_server, {ssl, false, undefined})
+                               establish_control_connection(ControlPid, some_socket, ip, fake_server, {ssl, false, undefined, undefined, undefined})
                        end),
     receive
         {accepted, Child} ->

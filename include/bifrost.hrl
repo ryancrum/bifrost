@@ -12,6 +12,8 @@
           module_state,
           ssl_allowed = false,
           ssl_cert = undefined,
+          ssl_key = undefined,
+          ssl_ca_cert = undefined,
           protection_mode = clear, % can also be `private'
           pb_size = 0,
           control_socket = undefined,
