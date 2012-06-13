@@ -1,3 +1,9 @@
+%%%-------------------------------------------------------------------
+%%% File    : gen_bifrost_server.erl
+%%% Author  : Ryan Crum <ryan.j.crum@gmail.com>
+%%% Description : Behavior for a Bifrost FTP server.
+%%%-------------------------------------------------------------------
+
 -module(gen_bifrost_server).
 -export([behaviour_info/1]).
 

@@ -1,3 +1,10 @@
+%%%-------------------------------------------------------------------
+%%% File    : memory_server.erl
+%%% Author  : Ryan Crum <ryan.j.crum@gmail.com>
+%%% Description : A simplistic and useless implementation of a
+%%%               bifrost server.
+%%%-------------------------------------------------------------------
+
 -module(memory_server).
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").

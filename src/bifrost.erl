@@ -1,7 +1,12 @@
+%%%-------------------------------------------------------------------
+%%% File    : bifrost.erl
+%%% Author  : Ryan Crum <ryan.j.crum@gmail.com>
+%%% Description : Pluggable FTP Server gen_server
+%%%-------------------------------------------------------------------
+
 -module(bifrost).
 
 -behaviour(gen_server).
-
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -1363,4 +1368,5 @@ quit_test() ->
               end
              ),
     execute(Child).
+
 -endif.
