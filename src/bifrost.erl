@@ -134,6 +134,11 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
 respond_raw({SocketMod, Socket}, Line) ->
     SocketMod:send(Socket, Line ++ "\r\n").
 
+ssl_options(State) ->
+    [{keyfile, State#connection_state.ssl_key},
+     {certfile, State#connection_state.ssl_cert}, 
+     {cacertfile, State#connection_state.ssl_ca_cert}].
+
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
@@ -143,29 +148,33 @@ data_connection(ControlSocket, State) ->
                     {gen_tcp, DataSocket};
                 private ->
                     case ssl:ssl_accept(DataSocket, 
-                                        [{keyfile, State#connection_state.ssl_key},
-                                         {certfile, State#connection_state.ssl_cert}, 
-                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
+                                        ssl_options(State)) of
                         {ok, SslSocket} ->
                             {ssl, SslSocket};
                         E ->
-                            respond(ControlSocket, 425, "Can't open data connection."),
+                            respond(ControlSocket, 425),
                             throw({error, E})
                     end
             end;
         {error, Error} ->
-            respond(ControlSocket, 425, "Can't open data connection"),
+            respond(ControlSocket, 425),
             throw(Error)
     end.
 
+
+% passive -- accepts an inbound connection
 establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
     gen_tcp:accept(Listen);
+
+% active -- establishes an outbound connection
 establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
     gen_tcp:connect(Addr, Port, [{active, false}, binary]).
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
         {passive, PasvListen, _} ->
+            % We should only have one passive socket open at a time, so close the current one
+            % and open a new one.
             gen_tcp:close(PasvListen),
             pasv_connection(ControlSocket, State#connection_state{pasv_listen=undefined});
         undefined ->
@@ -186,8 +195,9 @@ pasv_connection(ControlSocket, State) ->
                     
                     {ok,
                      State#connection_state{pasv_listen=PasvSocketInfo}};
-                {error, Error} ->
-                    {error, Error}
+                {error, _} ->
+                    respond(ControlSocket, 425),
+                    {ok, State}
             end
     end.
 
@@ -207,21 +217,21 @@ ftp_command(_, Socket, State, pasv, _) ->
 
 ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
     if State#connection_state.ssl_allowed =:= false ->
-            respond(Socket, 500);
+            respond(Socket, 500),
+            {ok, State};
        true ->
             case string:to_lower(Arg) of
                 "tls" ->
                     respond(Socket, 234, "Command okay."),
                     case ssl:ssl_accept(RawSocket, 
-                                        [{keyfile, State#connection_state.ssl_key},
-                                         {certfile, State#connection_state.ssl_cert}, 
-                                         {cacertfile, State#connection_state.ssl_ca_cert}]) of
+                                        ssl_options(State)) of
                         {ok, SslSocket} ->
                             {new_socket, 
                              State#connection_state{ssl_socket=SslSocket},
                              {ssl, SslSocket}};
-                        E ->
-                            {error, E}
+                        _ ->
+                            respond(Socket, 500),
+                            {ok, State}
                     end;
                 _ ->
                     respond(Socket, 502, "Unsupported security extension."),
@@ -264,7 +274,8 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
             {error, closed}
      end;
 
-%% from this point on every command requires authentication
+%% ^^^ from this point down every command requires authentication ^^^
+
 ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _) ->
     respond(Socket, 530),
     {ok, State};
@@ -527,12 +538,9 @@ bf_close({SockMod, Socket}) ->
 bf_recv({SockMod, Socket}, Count) ->
     SockMod:recv(Socket, Count).
 
-%% OUTPUT FORMATTING
-%% Some of this formatting code has been shamelessly/fully 
-%% yanked from jungerl/ftpd.erl
-%% FTP code strings 
-response_code_string(110) -> "MARK yyyy = mmmm";             %% ARGS
-response_code_string(120) -> "Service ready in nnn minutes.";  %% ARG
+% Adapted from jungerl/ftpd.erl
+response_code_string(110) -> "MARK yyyy = mmmm";
+response_code_string(120) -> "Service ready in nnn minutes.";
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
 response_code_string(150) -> "File status okay; about to open data connection.";
 response_code_string(200) -> "Command okay.";
@@ -540,16 +548,16 @@ response_code_string(202) -> "Command not implemented, superfluous at this site.
 response_code_string(211) -> "System status, or system help reply.";
 response_code_string(212) -> "Directory status.";
 response_code_string(213) -> "File status.";
-response_code_string(214) -> "Help message.";     %% ADD HELP
-response_code_string(215) -> "UNIX system type";  %% set NAME
+response_code_string(214) -> "Help message.";
+response_code_string(215) -> "UNIX system type";
 response_code_string(220) -> "Service ready for user.";
 response_code_string(221) -> "Service closing control connection.";
 response_code_string(225) -> "Data connection open; no transfere in progress";    
-response_code_string(226) -> "Closing data connection.";  %% ADD INFO
-response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2).";  %% ARGS
+response_code_string(226) -> "Closing data connection.";
+response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2).";
 response_code_string(230) -> "User logged in, proceed.";
 response_code_string(250) -> "Requested file action okay, completed.";
-response_code_string(257) -> "PATHNAME created.";  %% ARG
+response_code_string(257) -> "PATHNAME created.";
 response_code_string(331) -> "User name okay, need password.";
 response_code_string(332) -> "Need account for login.";
 response_code_string(350) -> "Requested file action pending further information.";
@@ -572,7 +580,8 @@ response_code_string(552) -> "Requested file action aborted.";
 response_code_string(553) -> "Requested action not taken.";
 response_code_string(_) -> "N/A".
 
-% printing functions ripped from jungerl/ftpd
+% Taken from jungerl/ftpd
+
 file_info_to_string(Info) ->
     format_type(Info#file_info.type) ++
         format_access(Info#file_info.mode) ++ " " ++
@@ -648,10 +657,10 @@ month(10) -> "Oct";
 month(11) -> "Nov";
 month(12) -> "Dec".
 
-%% parse address on form:
-%% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
-%% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
-%%
+% parse address on form:
+% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
+% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
+% Taken from jungerl/ftpd
 parse_address(Str) ->
     paddr(Str, 0, []).
 
@@ -677,8 +686,11 @@ format_port(PortNumber) ->
     [A,B] = binary_to_list(<<PortNumber:16>>),
     {A, B}.
 
-% TESTS
 -ifdef(TEST).
+
+%% EUNIT TESTS %%
+
+% Testing Utility Functions %
 
 setup() ->
     meck:new(gen_tcp, [unstick]),
@@ -704,30 +716,6 @@ execute(ListenerPid) ->
                TEST_NAME(active),
                TEST_NAME(passive)).
 
-strip_newlines_test() ->
-    "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
-    "testing again" = strip_newlines("testing again").
-
-parse_input_test() ->
-    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
-    {test, ""} = parse_input("Test\r\n"),
-    {test, "awesome"} = parse_input("Test awesome\r\n").
-
-format_access_test() ->
-    "rwxrwxrwx" = format_access(8#0777),
-    "rw-rw-rw-" = format_access(8#0666),
-    "r--rwxrwx" = format_access(8#0477),
-    "---------" = format_access(0).
-
-format_number_test() ->
-    "005" = format_number(5, 3, $0),
-    "500" = format_number(500, 2, $0),
-    "500" = format_number(500, 3, $0).
-
-parse_address_test() ->
-    {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
-    error = parse_address("MEAT MEAT").
-
 mock_socket_response(S, R) ->
     meck:expect(gen_tcp,
                 send,
@@ -738,7 +726,8 @@ mock_socket_response(S, R) ->
                         ok
                 end).
 
-script_dialog([]) -> 
+% Awkward, monadic interaction sequence testing
+script_dialog([]) ->
     meck:expect(gen_tcp,
                 recv,
                 fun(_, _) -> {error, closed} end);
@@ -774,7 +763,49 @@ script_dialog([{req, Socket, Request} | Rest]) ->
                         {ok, Request}
                 end).
 
-% FUNCTIONAL TESTS
+% executes the next step in the test script
+step(Pid) ->
+    Pid ! {ack, self()},
+    receive 
+        {new_state, _, _} ->
+            ok;
+        _ ->
+            ?assert(fail)
+    end.
+
+% stops the script
+finish(Pid) ->
+    Pid ! {done, self()}.
+
+
+% Unit Tests %
+
+strip_newlines_test() ->
+    "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
+    "testing again" = strip_newlines("testing again").
+
+parse_input_test() ->
+    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
+    {test, ""} = parse_input("Test\r\n"),
+    {test, "awesome"} = parse_input("Test awesome\r\n").
+
+format_access_test() ->
+    "rwxrwxrwx" = format_access(8#0777),
+    "rw-rw-rw-" = format_access(8#0666),
+    "r--rwxrwx" = format_access(8#0477),
+    "---------" = format_access(0).
+
+format_number_test() ->
+    "005" = format_number(5, 3, $0),
+    "500" = format_number(500, 2, $0),
+    "500" = format_number(500, 3, $0).
+
+parse_address_test() ->
+    {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
+    error = parse_address("MEAT MEAT").
+
+
+% Functional/Integration Tests %
 
 control_connection_establishment_test() ->
     meck:new(gen_tcp, [unstick]),
@@ -822,18 +853,6 @@ login_test_user(SocketPid, Script) ->
         {new_state, _, _} ->
             ok
     end.
-
-step(Pid) ->
-    Pid ! {ack, self()},
-    receive 
-        {new_state, _, _} ->
-            ok;
-        _ ->
-            ?assert(fail)
-    end.
-
-finish(Pid) ->
-    Pid ! {done, self()}.
 
 authenticate_successful_test() ->
     setup(),
