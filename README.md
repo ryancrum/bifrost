@@ -36,7 +36,7 @@ init([]) ->
          [{bifrost,
            {bifrost,
             start_link,
-            [GenBifrostServerModule, ExternalIpAddress, [{port, Port}]]},
+            [GenBifrostServerModule, [{ip_address, ExternalIpAddress}, {port, Port}]]},
            permanent,
            5000,
            worker,

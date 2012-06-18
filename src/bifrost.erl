@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/3, establish_control_connection/5, await_connections/4]).
+-export([start_link/2, establish_control_connection/5, await_connections/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -23,10 +23,10 @@ default(Expr, Default) ->
             Expr
     end.
 
-start_link(HookModule, IpAddress, Opts) ->
-    gen_server:start_link(?MODULE, [HookModule, IpAddress, Opts], []).
+start_link(HookModule, Opts) ->
+    gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
-init([HookModule, IpAddress, Opts]) ->
+init([HookModule, Opts]) ->
     Port = default(proplists:get_value(port, Opts), 21),
     Ssl = default(proplists:get_value(ssl, Opts), false),
     SslKey = proplists:get_value(ssl_key, Opts),
@@ -34,6 +34,7 @@ init([HookModule, IpAddress, Opts]) ->
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
+            IpAddress = default(proplists:get_value(ip_address, Opts), get_socket_addr(Listen)),
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
                                 [Listen, 
@@ -62,6 +63,12 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+get_socket_addr(Socket) ->
+    case inet:sockname(Socket) of
+        {ok, {Addr, _}} ->
+            Addr
+    end.
 
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
