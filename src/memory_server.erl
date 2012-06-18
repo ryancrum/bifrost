@@ -41,8 +41,8 @@
           fs = new_directory("/")
          }).
 
-init(_) ->
-    {}.
+init(InitialState) ->
+    InitialState.
 
 login(State, _Username, _Password) ->
     {true, initialize_state(State)}.

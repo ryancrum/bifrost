@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/2, establish_control_connection/5, await_connections/4]).
+-export([start_link/2, establish_control_connection/3, await_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -35,12 +35,15 @@ init([HookModule, Opts]) ->
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = default(proplists:get_value(ip_address, Opts), get_socket_addr(Listen)),
+            InitialState = #connection_state{module=HookModule,
+                                             ip_address=IpAddress,
+                                             ssl_allowed=Ssl,
+                                             ssl_key=SslKey,
+                                             ssl_cert=SslCert,
+                                             ssl_ca_cert=CaSslCert},
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, 
-                                 IpAddress, 
-                                 HookModule, 
-                                 {ssl, Ssl, SslKey, SslCert, CaSslCert}]),
+                                [Listen, HookModule:init(InitialState)]),
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
@@ -73,15 +76,15 @@ get_socket_addr(Socket) ->
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
 
-await_connections(Listen, IpAddress, Mod, SslOpts) ->
+await_connections(Listen, InitialState) ->
     proc_lib:spawn_link(?MODULE,
                         establish_control_connection,
-                        [self(), Listen, IpAddress, Mod, SslOpts]),
+                        [self(), Listen, InitialState]),
     receive
-        _ -> await_connections(Listen, IpAddress, Mod, SslOpts)
+        _ -> await_connections(Listen, InitialState)
     end.
 
-establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, KeyFile, CertFile, CaCertFile}) ->
+establish_control_connection(SrvPid, Listen, InitialState) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
             SrvPid ! {accepted, self()},
@@ -89,13 +92,7 @@ establish_control_connection(SrvPid, Listen, IpAddress, Mod, {ssl, SslAllowed, K
             control_loop(SrvPid, 
                          none, 
                          {gen_tcp, Socket}, 
-                         #connection_state{module=Mod, 
-                                           ip_address=IpAddress,
-                                           control_socket=Socket,
-                                           ssl_allowed=SslAllowed,
-                                           ssl_key=KeyFile,
-                                           ssl_cert=CertFile,
-                                           ssl_ca_cert=CaCertFile});
+                         InitialState#connection_state{control_socket=Socket});
         _Error ->
             exit(bad_accept)
     end.
@@ -823,7 +820,10 @@ control_connection_establishment_test() ->
     script_dialog([]),
     ControlPid = self(),
     Child = spawn_link(fun() ->
-                               establish_control_connection(ControlPid, some_socket, ip, fake_server, {ssl, false, undefined, undefined, undefined})
+                               establish_control_connection(ControlPid, 
+                                                            some_socket,
+                                                            #connection_state{module=fake_server,
+                                                                              ip_address=ip})
                        end),
     receive
         {accepted, Child} ->
