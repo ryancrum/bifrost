@@ -43,7 +43,7 @@ init([HookModule, Opts]) ->
                                              ssl_ca_cert=CaSslCert},
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, HookModule:init(InitialState)]),
+                                [Listen, HookModule:init(InitialState, Opts)]),
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}

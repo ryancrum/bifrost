@@ -12,7 +12,7 @@
 -behavior(gen_bifrost_server).
 
 -export([login/3, 
-         init/1, 
+         init/2, 
          current_directory/1, 
          make_directory/2, 
          change_directory/2, 
@@ -41,7 +41,7 @@
           fs = new_directory("/")
          }).
 
-init(InitialState) ->
+init(InitialState, _) ->
     InitialState.
 
 login(State, _Username, _Password) ->

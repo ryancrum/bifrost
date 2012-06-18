@@ -12,7 +12,7 @@ behaviour_info(callbacks) ->
     % State Change :: {ok, State} OR {error, State}
     % File Name :: String
     % HelpInfo :: {Name, Description}
-    [{init, 1}, % State -> State
+    [{init, 2}, % State, PropList (options) -> State
      {login, 3}, % State, Username, Password -> {true OR false, State}
      {current_directory, 1}, % State -> Path
      {make_directory, 2}, % State, Path -> State Change
