@@ -3,7 +3,6 @@
         {
           authenticated_state = unauthenticated,
           user_name,
-          ip,
           data_port = undefined,
           pasv_listen = undefined,
           ip_address = undefined,
@@ -14,7 +13,7 @@
           ssl_cert = undefined,
           ssl_key = undefined,
           ssl_ca_cert = undefined,
-          protection_mode = clear, % can also be `private'
+          protection_mode = clear,
           pb_size = 0,
           control_socket = undefined,
           ssl_socket = undefined
