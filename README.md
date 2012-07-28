@@ -22,7 +22,40 @@ Bifrost is a server implementation of the FTP protocol that allows you to define
 
 See `memory_server.erl`, a somewhat-feature-complete-but-completely-useless in-memory FTP server for an example implementation.
 
-Create a module with the `gen_bifrost_server` behaviour and implement all of the callbacks. memory_server will have to suffice for documentation until the bifrost interface is firmed up. Sorry.
+Create a module with the `gen_bifrost_server` behaviour and implement all of the callbacks. Documentation is on its way, but until then `memory_server` will unfortunately have to suffice.
+
+### gen_bifrost_server
+
+bifrost retains state for each connection which is stored in a record type `connection_state`. This state is passed into every `gen_bifrost_server` callback, and many of the callbacks should return a state.
+
+```erlang
+
+-record(connection_state,
+        {
+          authenticated_state = AuthState,
+          user_name = String,
+          data_port = DataPort,
+          pasv_listen = PasvPort,
+          ip_address = IpAddress, % FTP server IP
+          rnfr = String, % used by RNFR, RNTO
+          module = GenBifrostServerModule,
+          module_state = ModuleInternalState, % can be anything
+          ssl_allowed = Boolean,
+          ssl_cert = Path,
+          ssl_key = Path,
+          ssl_ca_cert = Path,
+          protection_mode = ProtectionMode,
+          pb_size = 0,
+          control_socket = Socket,
+          ssl_socket = Socket
+         }).
+```
+
+* `AuthState` = authenticated | unauthenticated
+* `DataPort` = {active, IpAddress, Port}
+* `PasvPort` = {passive, Socket, {IpAddress, Port}}
+* `ProtectionMode` = clear | private
+
 In your application supervisor add a bifrost child:
 
 `my_supervisor.erl`
