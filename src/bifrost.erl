@@ -598,7 +598,7 @@ file_info_to_string(Info) ->
 
 format_mdtm_date({{Year, Month, Day}, {Hours, Mins, Secs}}) ->
     lists:flatten(io_lib:format("~4..0B~2..0B~2..0B~2..0B~2..0B~2..0B",
-                                [Year, Month, Day, Hours, Mins, Secs])).
+                                [Year, Month, Day, Hours, Mins, erlang:trunc(Secs)])).
 
 format_date({Date, Time}) ->
     {Year, Month, Day} = Date,
@@ -1277,6 +1277,24 @@ mdtm_test() ->
                                                       mtime={{2012,2,3},{16,3,12}}}}
                                   end),
                       login_test_user(ControlPid, [{"MDTM cheese.txt", "213 20120203160312\r\n"}]),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
+    execute(Child).
+
+mdtm_truncate_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+                      meck:expect(fake_server,
+                                  file_info,
+                                  fun(_, "mould.txt") ->
+                                          {ok,
+                                           #file_info{type=file,
+                                                      mtime={{2012,2,3},{16,3,11.933844}}}}
+                                  end),
+                      login_test_user(ControlPid, [{"MDTM mould.txt", "213 20120203160311\r\n"}]),
                       step(ControlPid),
                       finish(ControlPid)
               end),
