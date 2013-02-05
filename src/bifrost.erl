@@ -433,18 +433,23 @@ ftp_command(Mod, Socket, State, help, Arg) ->
     end;
 
 ftp_command(Mod, Socket, State, retr, Arg) ->
-    DataSocket = data_connection(Socket, State),
-    Res = case Mod:get_file(State, Arg) of
+    try 
+        case Mod:get_file(State, Arg) of
               {ok, Fun} ->
+                  DataSocket = data_connection(Socket, State),
                   {ok, NewState} = write_fun(DataSocket, Fun),
                   respond(Socket, 226),
+                  bf_close(DataSocket),
                   {ok, NewState};
               error ->
                   respond(Socket, 550),
                   {ok, State}
-          end,
-    bf_close(DataSocket),
-    Res;
+        end
+    catch
+        _ -> 
+              respond(Socket, 550),
+              {ok, State}
+    end;
 
 ftp_command(Mod, Socket, State, mdtm, Arg) ->
     case Mod:file_info(State, Arg) of
