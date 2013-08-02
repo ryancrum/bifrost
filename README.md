@@ -3,20 +3,21 @@ Pluggable Erlang FTP Server
 
 > Then spoke Gangleri: "Does fire burn over Bifrost?"
 > High said: "The red you see in the rainbow is burning fire. The
->             frost-giants and mountain-giants would go up into 
+>             frost-giants and mountain-giants would go up into
 >             heaven if Bifrost was crossable by everyone that
 >             wanted to go."
->  -- from the Gylfaginning (Snorri Sturluson)
 
-### Warning: Bifrost is still in very early active development, is not yet documented and the interface is subject to dramatic changes.
+## Description
+
+Bifrost is an implementation of the FTP protocol that enables you to create an FTP server without worrying about the protocol details. Many legacy business systems still use FTP heavily for data transmission, and Bifrost can help bridge the gap between them and modern distributed systems. For example, using Bifrost you can pretty easily write an FTP server that serves files from Amazon's S3 and a Postgres SQL server instead of a filesystem.
+
+Bifrost also includes FTP/SSL support, if you supply a certificate.
 
 ## TODO
 
 - Document interface
-- Include real erlang application with included supervisor, not just a gen_server.
+- Add real sample application with included supervisor, not just a gen_server.
 
-## Description
-Bifrost is a server implementation of the FTP protocol that allows you to define your own backend (i.e. a filesystem, webservice, etc.). It includes implicit FTP/SSL support.
 
 ## Usage
 
@@ -85,8 +86,12 @@ Bifrost includes implicit FTP/SSL support. To use this functionality, just add s
 - `ssl_cert` should be the path to the PEM-encoded certificate file.
 - `ssl_ca_cert` should be the path to the CA's PEM-encoded certificate file.
 
+### Contributions
+
+Bifrost is being used in production environments, and has proven itself reliable. That being said, there are undoubtedly bugs and things that can be improved. Please feel free to submit issues (and pull requests!).
+
 ## License
 
-Copyright (C) 2012 Ryan Crum
+Copyright (C) 2012-2013 Ryan Crum
 
 Distributed under the MIT License.
