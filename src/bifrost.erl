@@ -368,8 +368,8 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
 
 ftp_command(Mod, Socket, State, stor, Arg) ->
     DataSocket = data_connection(Socket, State),
-    Fun = fun(_) ->
-                  case bf_recv(DataSocket, 0) of
+    Fun = fun(ByteCount) ->
+                  case bf_recv(DataSocket, ByteCount) of
                       {ok, Data} ->
                           {ok, Data, size(Data)};
                       {error, closed} ->
