@@ -153,7 +153,8 @@ list_files(State, Directory) ->
 
 % mode could be append or write, but we're only supporting
 % write.
-% FileRetrievalFun is fun(ByteCount) and retrieves ByteCount bytes
+% FileRetrievalFun is fun(ByteCount) and retrieves up to ByteCount bytes,
+% or as many bytes as are available if ByteCount == 0
 %  and returns {ok, Bytes, Count} or done
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
@@ -161,13 +162,12 @@ put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     ModState = get_module_state(State),
     Fs = get_fs(ModState),
     {ok, FileBytes, FileSize} = read_from_fun(FileRetrievalFun),
-    NewFs= set_path(Fs, Target, {file, 
+    NewFs= set_path(Fs, Target, {file,
                                  FileBytes,
                                  new_file_info(FileName, file, FileSize)}),
     NewModState = ModState#msrv_state{fs=NewFs},
     {ok, set_module_state(State, NewModState)}.
 
-    
 get_file(State, Path) ->
     Target = absolute_path(State, Path),
     ModState = get_module_state(State),
@@ -195,7 +195,7 @@ read_from_fun(Fun) ->
 read_from_fun(Buffer, Count, Fun) ->
     case Fun(1024) of
         {ok, Bytes, ReadCount} ->
-            read_from_fun(Buffer ++ binary:bin_to_list(Bytes), Count + ReadCount, Fun);
+            read_from_fun([Buffer, Bytes], Count + ReadCount, Fun);
         done ->
             io:format("DONE!"),
             {ok, Buffer, Count}
