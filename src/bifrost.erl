@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/2, establish_control_connection/2, await_connections/2]).
+-export([start_link/2, establish_control_connection/2, await_connections/2, supervise_connections/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -41,9 +41,12 @@ init([HookModule, Opts]) ->
                                              ssl_key=SslKey,
                                              ssl_cert=SslCert,
                                              ssl_ca_cert=CaSslCert},
+            Supervisor = proc_lib:spawn_link(?MODULE,
+                                             supervise_connections,
+                                             [HookModule:init(InitialState, Opts)]),
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
-                                [Listen, HookModule:init(InitialState, Opts)]),
+                                [Listen, Supervisor]),
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
@@ -76,16 +79,32 @@ get_socket_addr(Socket) ->
 listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
 
-await_connections(Listen, InitialState) ->
+await_connections(Listen, Supervisor) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
-            proc_lib:spawn(?MODULE,
-                           establish_control_connection,
-                           [Socket, InitialState]);
+            Supervisor ! {new_connection, Socket};
         _Error ->
             exit(bad_accept)
     end,
-    await_connections(Listen, InitialState).
+    await_connections(Listen, Supervisor).
+
+supervise_connections(InitialState) ->
+    process_flag(trap_exit, true),
+    receive
+        {new_connection, Socket} ->
+            proc_lib:spawn_link(?MODULE,
+                                establish_control_connection,
+                                [Socket, InitialState]);
+        {'EXIT', _Pid, normal} -> % not a crash
+            ok;
+        {'EXIT', _Pid, shutdown} -> % manual termination, not a crash
+            ok;
+        {'EXIT', Pid, Info} ->
+            error_logger:error_msg("Control connection ~p crashed: ~p~n", [Pid, Info]);
+        _ ->
+            ok
+    end,
+    supervise_connections(InitialState).
 
 establish_control_connection(Socket, InitialState) ->
     respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
