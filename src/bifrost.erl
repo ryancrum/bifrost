@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/2, establish_control_connection/3, await_connections/2]).
+-export([start_link/2, establish_control_connection/2, await_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -77,27 +77,23 @@ listen_socket(Port, TcpOpts) ->
     gen_tcp:listen(Port, TcpOpts).
 
 await_connections(Listen, InitialState) ->
-    proc_lib:spawn_link(?MODULE,
-                        establish_control_connection,
-                        [self(), Listen, InitialState]),
-    receive
-        _ -> await_connections(Listen, InitialState)
-    end.
-
-establish_control_connection(SrvPid, Listen, InitialState) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
-            SrvPid ! {accepted, self()},
-            respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
-            control_loop(SrvPid,
-                         none,
-                         {gen_tcp, Socket},
-                         InitialState#connection_state{control_socket=Socket});
+            proc_lib:spawn(?MODULE,
+                           establish_control_connection,
+                           [Socket, InitialState]);
         _Error ->
             exit(bad_accept)
-    end.
+    end,
+    await_connections(Listen, InitialState).
 
-control_loop(SrvPid, HookPid, {SocketMod, RawSocket} = Socket, State) ->
+establish_control_connection(Socket, InitialState) ->
+    respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
+    control_loop(none,
+                 {gen_tcp, Socket},
+                 InitialState#connection_state{control_socket=Socket}).
+
+control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
     case SocketMod:recv(RawSocket, 0) of
         {ok, Input} ->
             {Command, Arg} = parse_input(Input),
@@ -107,15 +103,15 @@ control_loop(SrvPid, HookPid, {SocketMod, RawSocket} = Socket, State) ->
                             HookPid ! {new_state, self(), NewState},
                             receive
                                 {ack, HookPid} ->
-                                    control_loop(SrvPid, HookPid, Socket, NewState);
+                                    control_loop(HookPid, Socket, NewState);
                                 {done, HookPid} ->
                                     {error, closed}
                             end;
                        true ->
-                            control_loop(SrvPid, HookPid, Socket, NewState)
+                            control_loop(HookPid, Socket, NewState)
                     end;
                 {new_socket, NewState, NewSock} ->
-                    control_loop(SrvPid, HookPid, NewSock, NewState);
+                    control_loop(HookPid, NewSock, NewState);
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
                     {error, timeout};
@@ -709,7 +705,6 @@ execute(ListenerPid) ->
     receive
         go ->
             control_loop(ListenerPid,
-                         ListenerPid,
                          {gen_tcp, socket},
                          #connection_state{module=fake_server,ip_address={127,0,0,1}}),
             meck:validate(fake_server),
@@ -815,28 +810,6 @@ parse_address_test() ->
 
 % Functional/Integration Tests %
 
-control_connection_establishment_test() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(inet, [unstick, passthrough]),
-    meck:expect(inet, sockname, fun(another_socket) -> {ok, {{127,0,0,1}, 2000}} end),
-    meck:expect(gen_tcp, accept, fun(some_socket) -> {ok, another_socket} end),
-    mock_socket_response(another_socket, "220 FTP Server Ready\r\n"),
-    script_dialog([]),
-    ControlPid = self(),
-    Child = spawn_link(fun() ->
-                               establish_control_connection(ControlPid,
-                                                            some_socket,
-                                                            #connection_state{module=fake_server,
-                                                                              ip_address=ip})
-                       end),
-    receive
-        {accepted, Child} ->
-            ok
-    end,
-    meck:validate(gen_tcp),
-    meck:unload(inet),
-    meck:unload(gen_tcp).
-
 authenticate_state(State) ->
     State#connection_state{authenticated_state=authenticated}.
 
@@ -900,7 +873,7 @@ authenticate_failure_test() ->
               end),
     script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
                   {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {error, closed} = control_loop(Child, Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
+    {error, closed} = control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
     meck:validate(fake_server),
     meck:validate(gen_tcp),
     meck:unload(inet),
@@ -927,7 +900,7 @@ unauthenticated_test() ->
               end),
     script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"},
                   {"MKD /unicorns", "530 Not logged in.\r\n"}]),
-    control_loop(Child, Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
+    control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
     meck:validate(gen_tcp),
     meck:unload(gen_tcp).
 
