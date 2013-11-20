@@ -133,10 +133,12 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
                     control_loop(HookPid, NewSock, NewState);
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
+                    SocketMod:close(RawSocket),
                     {error, timeout};
                 {error, closed} ->
                     {error, closed};
                 quit ->
+                    SocketMod:close(RawSocket),
                     {ok, quit}
             end;
         {error, _Reason} ->
@@ -290,7 +292,7 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
             {ok, NewState#connection_state{authenticated_state=authenticated}};
         _ ->
             respond(Socket, 530, "Login incorrect."),
-            {error, closed}
+            quit
      end;
 
 %% ^^^ from this point down every command requires authentication ^^^
@@ -870,6 +872,9 @@ authenticate_successful_test() ->
 
 authenticate_failure_test() ->
     setup(),
+    meck:expect(gen_tcp,
+                close,
+                fun(socket) -> ok end),
     meck:expect(fake_server,
                 login,
                 fun(_, "meat", "meatmeat") ->
@@ -892,7 +897,7 @@ authenticate_failure_test() ->
               end),
     script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
                   {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {error, closed} = control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
+    {ok, quit} = control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
     meck:validate(fake_server),
     meck:validate(gen_tcp),
     meck:unload(inet),
@@ -1393,6 +1398,9 @@ unrecognized_command_test() ->
 
 quit_test() ->
     setup(),
+    meck:expect(gen_tcp,
+                close,
+                fun(socket) -> ok end),
     ControlPid = self(),
     Child = spawn_link(
               fun () ->
