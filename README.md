@@ -92,6 +92,6 @@ Bifrost is being used in production environments, and has proven itself reliable
 
 ## License
 
-Copyright (C) 2012-2013 Ryan Crum, Phil Calvin
+Copyright (C) 2012-2013 Ryan Crum, Phil Calvin, Boris Resnick
 
 Distributed under the MIT License.
