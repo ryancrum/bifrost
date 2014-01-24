@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% File    : bifrost.erl
-%%% Author  : Ryan Crum <ryan.j.crum@gmail.com>
+%%% Author  : Ryan Crum <ryan@ryancrum.org>
 %%% Description : Pluggable FTP Server gen_server
 %%%-------------------------------------------------------------------
 
