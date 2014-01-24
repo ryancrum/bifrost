@@ -393,10 +393,16 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
                           done
                   end
           end,
-    {ok, NewState} = Mod:put_file(State, Arg, write, Fun),
+    RetState = case Mod:put_file(State, Arg, write, Fun) of
+                   {ok, NewState} ->
+                       NewState;
+                   {error, Info} ->
+                       respond(Socket, 451, io_lib:format("Error ~p when storing a file.", [Info])),
+                       State
+               end,
     respond(Socket, 226),
     bf_close(DataSocket),
-    {ok, NewState};
+    {ok, RetState};
 
 ftp_command(_, Socket, State, type, Arg) ->
     case Arg of
@@ -1206,6 +1212,32 @@ stor_test(Mode) ->
                                          ?assertEqual(Data, BinData),
                                          ?assertEqual(DataSize, size(BinData)),
                                          {ok, S}
+                                 end),
+
+                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                     login_test_user_with_data_socket(ControlPid, Script, Mode),
+                     step(ControlPid),
+                     finish(ControlPid)
+             end),
+    execute(Child).
+
+?dataSocketTest(stor_failure_test).
+stor_failure_test(Mode) ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+             fun() ->
+                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                               {req, data_socket, <<"SOME DATA HERE">>},
+                               {resp, socket, "451 Error access_denied when storing a file.\r\n"},
+                               {resp, socket, "226 Closing data connection.\r\n"}
+                              ],
+                     meck:expect(fake_server,
+                                 put_file,
+                                 fun(_, "bologna.txt", write, F) ->
+                                         F(1024),
+                                         {error, access_denied}
                                  end),
 
                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
