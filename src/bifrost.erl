@@ -6,6 +6,11 @@
 
 -module(bifrost).
 
+-behaviour(application).
+
+%% Application callbacks
+-export([start/2, stop/1]).
+
 -behaviour(gen_server).
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -26,6 +31,14 @@ default(Expr, Default) ->
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
+% application callbacks implemetation (runs stub supervisor)
+start(_StartType, _StartArgs) ->
+    bifrost_sup:start_link().
+
+stop(_State) ->
+    ok.
+
+% gen_server callbacks implemetation
 init([HookModule, Opts]) ->
     Port = default(proplists:get_value(port, Opts), 21),
     Ssl = default(proplists:get_value(ssl, Opts), false),
@@ -142,7 +155,7 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
                     {ok, quit}
             end;
         {error, _Reason} ->
-            io:format("Connection Terminated~n")
+                error_logger:warning_report({bifrost, connection_terminated})
     end.
 
 respond(Socket, ResponseCode) ->
@@ -520,8 +533,8 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
 
-ftp_command(_, Socket, State, Command, _) ->
-    io:format("Unrecognized command ~p~n", [Command]),
+ftp_command(_, Socket, State, Command, _Arg) ->
+    error_logger:warning_report({bifrost, unrecognized_command, Command}),
     respond(Socket, 500),
     {ok, State}.
 
