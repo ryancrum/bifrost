@@ -514,7 +514,7 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
 
-ftp_command(_, Socket, State, Command, Arg) ->
+ftp_command(_, Socket, State, Command, _) ->
     io:format("Unrecognized command ~p~n", [Command]),
     respond(Socket, 500),
     {ok, State}.
