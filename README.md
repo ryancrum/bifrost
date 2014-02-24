@@ -1,6 +1,8 @@
 # Bifrost
 Pluggable Erlang FTP Server
 
+[![Build Status](https://travis-ci.org/thorstadt/bifrost.png?branch=master)](https://travis-ci.org/thorstadt/bifrost)
+
 > Then spoke Gangleri: "Does fire burn over Bifrost?"
 > High said: "The red you see in the rainbow is burning fire. The
 >             frost-giants and mountain-giants would go up into
