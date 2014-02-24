@@ -408,12 +408,12 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
           end,
     RetState = case Mod:put_file(State, Arg, write, Fun) of
                    {ok, NewState} ->
+                       respond(Socket, 226),
                        NewState;
                    {error, Info} ->
                        respond(Socket, 451, io_lib:format("Error ~p when storing a file.", [Info])),
                        State
                end,
-    respond(Socket, 226),
     bf_close(DataSocket),
     {ok, RetState};
 
