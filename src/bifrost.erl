@@ -1243,8 +1243,7 @@ stor_failure_test(Mode) ->
              fun() ->
                      Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
                                {req, data_socket, <<"SOME DATA HERE">>},
-                               {resp, socket, "451 Error access_denied when storing a file.\r\n"},
-                               {resp, socket, "226 Closing data connection.\r\n"}
+                               {resp, socket, "451 Error access_denied when storing a file.\r\n"}
                               ],
                      meck:expect(fake_server,
                                  put_file,
