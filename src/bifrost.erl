@@ -1226,7 +1226,7 @@ stor_test(Mode) ->
                      meck:expect(fake_server,
                                  put_file,
                                  fun(S, "bologna.txt", write, F) ->
-                                         {ok, Data, DataSize} = F(1024),
+                                         {ok, Data, DataSize} = F(),
                                          BinData = <<"SOME DATA HERE">>,
                                          ?assertEqual(Data, BinData),
                                          ?assertEqual(DataSize, size(BinData)),
@@ -1254,7 +1254,7 @@ stor_failure_test(Mode) ->
                      meck:expect(fake_server,
                                  put_file,
                                  fun(_, "bologna.txt", write, F) ->
-                                         F(1024),
+                                         F(),
                                          {error, access_denied}
                                  end),
 
