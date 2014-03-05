@@ -31,14 +31,14 @@ default(Expr, Default) ->
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
-% application callbacks implemetation (runs stub supervisor)
+% application callbacks implementation (runs stub supervisor)
 start(_StartType, _StartArgs) ->
     bifrost_sup:start_link().
 
 stop(_State) ->
     ok.
 
-% gen_server callbacks implemetation
+% gen_server callbacks implementation
 init([HookModule, Opts]) ->
     Port = default(proplists:get_value(port, Opts), 21),
     Ssl = default(proplists:get_value(ssl, Opts), false),
