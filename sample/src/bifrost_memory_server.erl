@@ -11,6 +11,7 @@
 
 -behavior(gen_bifrost_server).
 
+% Bifrost callbacks
 -export([login/3,
          init/2,
          current_directory/1,
@@ -35,18 +36,23 @@
 -export([fs_with_paths/1, fs_with_paths/2, add_file/3]).
 -endif.
 
+% The structure for the Server's state. This is where you'll keep state about the current
+% user's session in your own module.
 -record(msrv_state,
         {
           current_dir = [[]],
           fs = new_directory("/")
          }).
 
+% Initialize the state
 init(InitialState, _) ->
     InitialState.
 
+% Authenticate the user. Return {false, State} to fail.
 login(State, _Username, _Password) ->
     {true, initialize_state(State)}.
 
+% Return the current directory.
 current_directory(State) ->
     case current_directory_list(State) of
         [[]] ->
@@ -55,6 +61,7 @@ current_directory(State) ->
             string:join(Path, "/")
     end.
 
+% mkdir -- in this case, just alter the state since we're in-memory.
 make_directory(State, Directory) ->
     Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
@@ -68,6 +75,7 @@ make_directory(State, Directory) ->
             {error, State}
     end.
 
+% Change the current directory.
 change_directory(State, Directory) ->
     Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
@@ -87,6 +95,7 @@ change_directory(State, Directory) ->
 disconnect(_) ->
     ok.
 
+% Delete a file
 remove_file(State, File) ->
     Target = absolute_path(State, File),
     ModState = get_module_state(State),
@@ -105,9 +114,11 @@ remove_file(State, File) ->
             {error, unknown}
     end.
 
+% Renaming is not yet supported by this module. Return {ok, State} if you support it.
 rename_file(_State, _FromPath, _ToPath) ->
     {error, not_supported}.
 
+% Delete a directory.
 remove_directory(State, Directory) ->
     Target = absolute_path(State, Directory),
     ModState = get_module_state(State),
@@ -131,6 +142,7 @@ remove_directory(State, Directory) ->
             {error, unknown}
     end.
 
+% List files in the current or specified directory.
 list_files(State, "") ->
     list_files(State, current_directory(State));
 list_files(State, Directory) ->
@@ -153,9 +165,7 @@ list_files(State, Directory) ->
 
 % mode could be append or write, but we're only supporting
 % write.
-% FileRetrievalFun is fun(ByteCount) and retrieves up to ByteCount bytes,
-% or as many bytes as are available if ByteCount == 0
-%  and returns {ok, Bytes, Count} or done
+% FileRetrievalFun is fun() and returns {ok, Bytes, Count} or done
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
     Target = absolute_path(State, FileName),
@@ -168,6 +178,8 @@ put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     NewModState = ModState#msrv_state{fs=NewFs},
     {ok, set_module_state(State, NewModState)}.
 
+% Returns {ok, fun(ByteCount)}, which is a function that reads ByteCount byes
+% and itself returns a continuation until {done, State} is returned.
 get_file(State, Path) ->
     Target = absolute_path(State, Path),
     ModState = get_module_state(State),
@@ -179,6 +191,7 @@ get_file(State, Path) ->
             error
     end.
 
+% Returns a file_info struct about the given path
 file_info(State, Path) ->
     Target = absolute_path(State, Path),
     ModState = get_module_state(State),
@@ -189,6 +202,15 @@ file_info(State, Path) ->
         _ ->
             {error, not_found}
     end.
+
+% SITE command support
+site_command(_, _, _) ->
+    {error, not_found}.
+
+site_help(_) ->
+    {error, not_found}.
+
+% Memory Server-specific Functions
 
 read_from_fun(Fun) ->
     read_from_fun([], 0, Fun).
@@ -219,13 +241,6 @@ reading_fun(State, Pos, Bytes=[Head|Rest]) ->
             end
     end.
 
-site_command(_, _, _) ->
-    {error, not_found}.
-
-site_help(_) ->
-    {error, not_found}.
-
-%% priv
 get_module_state(State) ->
     State#connection_state.module_state.
 
@@ -342,7 +357,7 @@ set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
             FileInfo}
     end.
 
-%% Tests
+% Tests
 -ifdef(TEST).
 
 fs_with_paths([], State) ->
