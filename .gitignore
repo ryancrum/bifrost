@@ -1,3 +1,6 @@
 .eunit/*
 deps/*
 ebin/*
+sample/ebin/*
+sample/deps/*
+sample/.eunit/*
