@@ -6,11 +6,6 @@
 
 -module(bifrost).
 
--behaviour(application).
-
-%% Application callbacks
--export([start/2, stop/1]).
-
 -behaviour(gen_server).
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -30,13 +25,6 @@ default(Expr, Default) ->
 
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
-
-% application callbacks implementation (runs stub supervisor)
-start(_StartType, _StartArgs) ->
-    bifrost_sup:start_link().
-
-stop(_State) ->
-    ok.
 
 % gen_server callbacks implementation
 init([HookModule, Opts]) ->
