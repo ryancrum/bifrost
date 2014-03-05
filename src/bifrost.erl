@@ -404,8 +404,8 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
 
 ftp_command(Mod, Socket, State, stor, Arg) ->
     DataSocket = data_connection(Socket, State),
-    Fun = fun(ByteCount) ->
-                  case bf_recv(DataSocket, ByteCount) of
+    Fun = fun() ->
+                  case bf_recv(DataSocket) of
                       {ok, Data} ->
                           {ok, Data, size(Data)};
                       {error, closed} ->
@@ -585,8 +585,8 @@ bf_send({SockMod, Socket}, Data) ->
 bf_close({SockMod, Socket}) ->
     SockMod:close(Socket).
 
-bf_recv({SockMod, Socket}, Count) ->
-    SockMod:recv(Socket, Count).
+bf_recv({SockMod, Socket}) ->
+    SockMod:recv(Socket, 0).
 
 % Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
