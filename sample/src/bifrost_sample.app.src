@@ -1,0 +1,7 @@
+{application,
+ bifrost_sample,
+ [
+  {vsn, "1"},
+  {applications, [kernel, stdlib]},
+  {mod, {bifrost_sample_app, []}}
+ ]}.

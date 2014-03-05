@@ -5,22 +5,22 @@
 %%%               bifrost server.
 %%%-------------------------------------------------------------------
 
--module(memory_server).
--include("bifrost.hrl").
+-module(bifrost_memory_server).
+-include("../include/bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -behavior(gen_bifrost_server).
 
--export([login/3, 
-         init/2, 
-         current_directory/1, 
-         make_directory/2, 
-         change_directory/2, 
-         list_files/2, 
-         remove_directory/2, 
-         remove_file/2, 
-         put_file/4, 
-         get_file/2, 
+-export([login/3,
+         init/2,
+         current_directory/1,
+         make_directory/2,
+         change_directory/2,
+         list_files/2,
+         remove_directory/2,
+         remove_file/2,
+         put_file/4,
+         get_file/2,
          file_info/2,
          rename_file/3,
          site_command/3,
@@ -35,7 +35,7 @@
 -export([fs_with_paths/1, fs_with_paths/2, add_file/3]).
 -endif.
 
--record(msrv_state, 
+-record(msrv_state,
         {
           current_dir = [[]],
           fs = new_directory("/")
@@ -60,9 +60,9 @@ make_directory(State, Directory) ->
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
         not_found ->
-            {ok, set_state_fs(State, 
-                              set_path(Fs, 
-                                       Target, 
+            {ok, set_state_fs(State,
+                              set_path(Fs,
+                                       Target,
                                        new_directory(lists:last(Target))))};
         _ ->
             {error, State}
@@ -97,8 +97,8 @@ remove_file(State, File) ->
         {dir, _, _} ->
             {error, not_file};
         {file, _, _} ->
-            NewModState = ModState#msrv_state{fs=set_path(Fs, 
-                                                          Target, 
+            NewModState = ModState#msrv_state{fs=set_path(Fs,
+                                                          Target,
                                                           remove)},
             {ok, set_module_state(State, NewModState)};
         _ ->
@@ -122,8 +122,8 @@ remove_directory(State, Directory) ->
             if DictSize > 0 ->
                     {error, not_empty};
                true ->
-                    NewModState = ModState#msrv_state{fs=set_path(Fs, 
-                                                                  Target, 
+                    NewModState = ModState#msrv_state{fs=set_path(Fs,
+                                                                  Target,
                                                                   remove)},
                     {ok, set_module_state(State, NewModState)}
             end;
@@ -141,9 +141,9 @@ list_files(State, Directory) ->
             {error, State};
         {dir, Dict, DirInfo} ->
             {dir, _, ParentInfo} = fetch_parent(Fs, Target),
-            lists:map(fun({_,{_, _, Info}}) -> Info end, 
+            lists:map(fun({_,{_, _, Info}}) -> Info end,
                       dict:to_list(Dict)) ++
-                [DirInfo#file_info{name = "."}, 
+                [DirInfo#file_info{name = "."},
                  ParentInfo#file_info{name = ".."}];
         {file, _, Info} ->
             [Info];
@@ -193,24 +193,28 @@ file_info(State, Path) ->
 read_from_fun(Fun) ->
     read_from_fun([], 0, Fun).
 read_from_fun(Buffer, Count, Fun) ->
-    case Fun(1024) of
+    case Fun() of
         {ok, Bytes, ReadCount} ->
-            read_from_fun([Buffer, Bytes], Count + ReadCount, Fun);
+            read_from_fun(Buffer ++ [Bytes], Count + ReadCount, Fun);
         done ->
-            io:format("DONE!"),
             {ok, Buffer, Count}
     end.
 
 reading_fun(State, Bytes) ->
-    reading_fun(State, 1, Bytes).
-reading_fun(State, Pos, Bytes) ->
-    TotalSize = length(Bytes),
-    fun(ByteCount) ->
-            Window = list_to_binary(lists:sublist(Bytes, Pos, ByteCount)),
-            ReadCount = size(Window),
-            if Pos >= TotalSize ->
-                    {done, State};
-               true ->
+    reading_fun(State, 0, Bytes).
+reading_fun(State, _, []) ->
+    fun(_) ->
+            {done, State}
+    end;
+reading_fun(State, Pos, Bytes=[Head|Rest]) ->
+    TotalSize = size(Head),
+    RemainingBytes = TotalSize - Pos,
+    if Pos >= TotalSize ->
+            reading_fun(State, 0, Rest);
+       true ->
+            fun(ByteCount) ->
+                    Window = binary:part(Head, Pos, min(RemainingBytes, ByteCount)),
+                    ReadCount = size(Window),
                     {ok, Window, reading_fun(State, Pos + ReadCount, Bytes)}
             end
     end.
@@ -294,7 +298,7 @@ fetch_path({_, Root, _}, [Current]) ->
             not_found
     end;
 fetch_path({dir, Root, _}, [Current | Rest]) ->
-    case dict:is_key(Current, Root) of 
+    case dict:is_key(Current, Root) of
         true ->
             fetch_path(dict:fetch(Current, Root), Rest);
         _ ->
@@ -302,7 +306,7 @@ fetch_path({dir, Root, _}, [Current | Rest]) ->
     end.
 
 new_file_info(Name, Type, Size) ->
-    #file_info{name=Name, 
+    #file_info{name=Name,
                mtime=erlang:localtime(),
                type=Type,
                mode=511, % 0777
@@ -325,14 +329,14 @@ set_path({dir, Root, FileInfo}, [Current], Val) ->
 set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
     case dict:is_key(Current, Root) of
         true ->
-            {dir, 
-             dict:store(Current, 
-                        set_path(dict:fetch(Current, Root), Rest, Val), 
+            {dir,
+             dict:store(Current,
+                        set_path(dict:fetch(Current, Root), Rest, Val),
                         Root),
             FileInfo};
         _ ->
-            {dir, 
-             dict:store(Current, 
+            {dir,
+             dict:store(Current,
                         set_path(new_directory(Current), Rest, Val),
                         Root),
             FileInfo}
@@ -351,10 +355,10 @@ fs_with_paths(Paths) ->
     fs_with_paths(Paths, wrap_fs(create_fs())).
 
 add_file(State, Path, Contents) ->
-    put_file(State, 
-             Path, 
-             image, 
-             fun(_) ->
+    put_file(State,
+             Path,
+             image,
+             fun() ->
                      {ok, Contents, size(Contents)}
              end).
 
