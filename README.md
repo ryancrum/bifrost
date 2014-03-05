@@ -3,7 +3,7 @@ Erlang FTP Server Framework
 
 [![Build Status](https://travis-ci.org/thorstadt/bifrost.png?branch=master)](https://travis-ci.org/thorstadt/bifrost)
 
-<img src="http://ryancrum.com/bifrost.jpg" alt="Bifrost" title="Bifrost" align="right" />
+<img src="http://ryancrum.com/bifrost.jpg" alt="Bifrost" />
 
 > Then spoke Gangleri: "Does fire burn over Bifrost?"
 > High said: "The red you see in the rainbow is burning fire. The
