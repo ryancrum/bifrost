@@ -1,21 +1,21 @@
-# Bifrost
+# Bifröst
 Erlang FTP Server Framework
 
 [![Build Status](https://travis-ci.org/thorstadt/bifrost.png?branch=master)](https://travis-ci.org/thorstadt/bifrost)
 
-<img src="http://ryancrum.com/bifrost.jpg" alt="Bifrost" />
+<img src="http://ryancrum.com/bifrost.jpg" alt="Bifröst" />
 
-> Then spoke Gangleri: "Does fire burn over Bifrost?"
+> Then spoke Gangleri: "Does fire burn over Bifröst?"
 > High said: "The red you see in the rainbow is burning fire. The
 >             frost-giants and mountain-giants would go up into
->             heaven if Bifrost was crossable by everyone that
+>             heaven if Bifröst was crossable by everyone that
 >             wanted to go."
 
 ## Description
 
-Bifrost is an implementation of the FTP protocol that enables you to create an FTP server without worrying about the protocol details. Many legacy business systems still use FTP heavily for data transmission, and Bifrost can help bridge the gap between them and modern distributed systems. For example, using Bifrost you can pretty easily write an FTP server that serves files from Amazon's S3 and a Postgres SQL server instead of a filesystem.
+Bifröst is an implementation of the FTP protocol that enables you to create an FTP server without worrying about the protocol details. Many legacy business systems still use FTP heavily for data transmission, and Bifröst can help bridge the gap between them and modern distributed systems. For example, using Bifröst you can pretty easily write an FTP server that serves files from Amazon's S3 and a Postgres SQL server instead of a filesystem.
 
-Bifrost also includes FTP/SSL support, if you supply a certificate.
+Bifröst also includes FTP/SSL support, if you supply a certificate.
 
 ## TODO
 
@@ -41,7 +41,7 @@ bifrost retains state for each connection which is stored in a record type `conn
           pasv_listen = PasvPort,
           ip_address = IpAddress, % FTP server IP
           rnfr = String, % used by RNFR, RNTO
-          module = GenBifrostServerModule,
+          module = GenBifröstServerModule,
           module_state = ModuleInternalState, % can be anything
           ssl_allowed = Boolean,
           ssl_cert = Path,
@@ -65,14 +65,14 @@ In your application supervisor add a bifrost child:
 
 ```erlang
 init([]) ->
-  GenBifrostServerModule = some_module,
+  GenBifröstServerModule = some_module,
   ExternalIpAddress = {127,0,0,1},
   Port = 21,
   {ok, { {one_for_one, 5, 10},
          [{bifrost,
            {bifrost,
             start_link,
-            [GenBifrostServerModule, [{ip_address, ExternalIpAddress}, {port, Port}]]},
+            [GenBifröstServerModule, [{ip_address, ExternalIpAddress}, {port, Port}]]},
            permanent,
            5000,
            worker,
@@ -81,7 +81,7 @@ init([]) ->
 
 ### SSL
 
-Bifrost includes implicit FTP/SSL support. To use this functionality, just add some additional startup options to the start_link call.
+Bifröst includes implicit FTP/SSL support. To use this functionality, just add some additional startup options to the start_link call.
 
 - `ssl` should be `true`.
 - `ssl_key` should be the path to the PEM-encoded private key file.
@@ -90,7 +90,7 @@ Bifrost includes implicit FTP/SSL support. To use this functionality, just add s
 
 ### Contributions
 
-Bifrost is being used in production environments, and has proven itself reliable. That being said, there are undoubtedly bugs and things that can be improved. Please feel free to submit issues (and pull requests!).
+Bifröst is being used in production environments, and has proven itself reliable. That being said, there are undoubtedly bugs and things that can be improved. Please feel free to submit issues (and pull requests!).
 
 ## License
 
