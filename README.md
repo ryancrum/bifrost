@@ -1,7 +1,9 @@
 # Bifrost
-Pluggable Erlang FTP Server
+Erlang FTP Server Framework
 
 [![Build Status](https://travis-ci.org/thorstadt/bifrost.png?branch=master)](https://travis-ci.org/thorstadt/bifrost)
+
+<img src="http://ryancrum.com/bifrost.jpg" alt="Bifrost" title="Bifrost" align="right" />
 
 > Then spoke Gangleri: "Does fire burn over Bifrost?"
 > High said: "The red you see in the rainbow is burning fire. The
@@ -18,8 +20,6 @@ Bifrost also includes FTP/SSL support, if you supply a certificate.
 ## TODO
 
 - Document interface
-- Add real sample application with included supervisor, not just a gen_server.
-
 
 ## Usage
 
