@@ -1504,11 +1504,12 @@ utf8_success_test(Mode) ->
              fun() ->
 					FileName = "Молоко-Яйки", %milk-eggs
 					UtfFileName = ucs2_to_utf8(FileName), %milk-eggs 
+                    FileContent = <<"SOME DATA HERE">>,
 
                     Script =[	{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
 								{"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
 								{"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
-								{req, data_socket, <<"SOME DATA HERE">>},
+								{req, data_socket, FileContent },
 								{resp, socket, "226 Closing data connection.\r\n"},
 								{"LIST", "150 File status okay; about to open data connection.\r\n"},
                                 {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
@@ -1526,7 +1527,7 @@ utf8_success_test(Mode) ->
                     meck:expect(fake_server,
                                   change_directory,
                                   fun(State, InFileName) -> 
-										InFileName = FileName, 
+										?assertEqual(InFileName, FileName), 
 										{ok, State} 
 								  end),
 					step(ControlPid),
@@ -1534,11 +1535,10 @@ utf8_success_test(Mode) ->
                     meck:expect(fake_server,
                                  put_file,
                                  fun(S, InFileName, write, F) ->
-										 InFileName = FileName,
+										 ?assertEqual(InFileName, FileName),
                                          {ok, Data, DataSize} = F(),
-                                         BinData = <<"SOME DATA HERE">>,
-                                         ?assertEqual(Data, BinData),
-                                         ?assertEqual(DataSize, size(BinData)),
+                                         ?assertEqual(Data, FileContent),
+                                         ?assertEqual(DataSize, size(FileContent)),
                                          {ok, S}
                                  end),
 
