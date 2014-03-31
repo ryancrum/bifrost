@@ -94,6 +94,6 @@ Bifröst is being used in production environments, and has proven itself reliabl
 
 ## License
 
-Copyright (C) 2012-2014 Ryan Crum, Phil Calvin, Boris Resnick
+Copyright (C) 2012-2014 Ryan Crum, Phil Calvin, Boris Resnick, madRat
 
 Distributed under the MIT License.
