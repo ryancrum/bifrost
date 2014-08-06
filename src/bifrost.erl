@@ -527,6 +527,21 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
 
+ftp_command(Mod, Socket, State, feat, Arg) ->
+    respond_raw(Socket, "211-Features"),
+    respond_raw(Socket, " UTF8"),
+    respond(Socket, 211, "End"),
+    {ok, State};
+
+ftp_command(Mod, Socket, State, opts, Arg) ->
+    case string:to_upper(Arg) of
+        "UTF8 ON" ->
+            respond(Socket, 200, "Accepted");
+        _ ->
+            respond(Socket, 501)
+    end,
+    {ok, State};
+
 ftp_command(Mod, Socket, State, size, Arg) ->
     respond(Socket, 550),
     {ok, State};
