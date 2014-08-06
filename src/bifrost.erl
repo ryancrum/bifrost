@@ -326,7 +326,7 @@ ftp_command(Mod, Socket, State, cwd, Arg) ->
             respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450, "Unable to change directory"),
+            respond(Socket, 550, "Unable to change directory"),
             {ok, State}
     end;
 
@@ -336,7 +336,7 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450, "Unable to create directory"),
+            respond(Socket, 550, "Unable to create directory"),
             {ok, State}
     end;
 
@@ -372,7 +372,7 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             respond(Socket, 200),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450),
+            respond(Socket, 550),
             {ok, State}
         end;
 
@@ -526,6 +526,10 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
+
+ftp_command(Mod, Socket, State, size, Arg) ->
+    respond(Socket, 550),
+    {ok, State};
 
 ftp_command(_, Socket, State, Command, _Arg) ->
     error_logger:warning_report({bifrost, unrecognized_command, Command}),
@@ -953,7 +957,7 @@ mkdir_test() ->
                                   end),
                       login_test_user(ControlPid,
                                       [{"MKD test_dir", "250 \"test_dir\" directory created.\r\n"},
-                                       {"MKD test_dir_2", "450 Unable to create directory\r\n"}]),
+                                       {"MKD test_dir_2", "550 Unable to create directory\r\n"}]),
                       step(ControlPid),
 
                       meck:expect(fake_server,
@@ -982,7 +986,7 @@ cwd_test() ->
                                   fun(_) -> "/meat/bovine/bison" end),
                       login_test_user(ControlPid,
                                       [{"CWD /meat/bovine/bison", "250 directory changed to \"/meat/bovine/bison\"\r\n"},
-                                       {"CWD /meat/bovine/auroch", "450 Unable to change directory\r\n"}]),
+                                       {"CWD /meat/bovine/auroch", "550 Unable to change directory\r\n"}]),
 
                       step(ControlPid),
 
@@ -1161,7 +1165,7 @@ remove_directory_test() ->
                                  end),
 
                      login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"},
-                                              {"RMD /bison/burgers", "450 Requested file action not taken.\r\n"}]),
+                                              {"RMD /bison/burgers", "550 Requested file action not taken.\r\n"}]),
                      step(ControlPid),
 
                      meck:expect(fake_server,
