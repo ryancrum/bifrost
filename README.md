@@ -50,7 +50,8 @@ bifrost retains state for each connection which is stored in a record type `conn
           protection_mode = ProtectionMode,
           pb_size = 0,
           control_socket = Socket,
-          ssl_socket = Socket
+          ssl_socket = Socket,
+          utf8 = Boolean
          }).
 ```
 
@@ -87,6 +88,10 @@ Bifröst includes implicit FTP/SSL support. To use this functionality, just add 
 - `ssl_key` should be the path to the PEM-encoded private key file.
 - `ssl_cert` should be the path to the PEM-encoded certificate file.
 - `ssl_ca_cert` should be the path to the CA's PEM-encoded certificate file.
+
+### UTF-8
+
+Bifröst will advertise UTF8 support to clients if enabled with {utf8, true} in startup options. If advertised, it is up to implementation to encode data as required.
 
 ### Contributions
 

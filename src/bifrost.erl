@@ -33,6 +33,7 @@ init([HookModule, Opts]) ->
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
+    UTF8 = proplists:get_value(utf8, Opts),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = default(proplists:get_value(ip_address, Opts), get_socket_addr(Listen)),
@@ -41,7 +42,8 @@ init([HookModule, Opts]) ->
                                              ssl_allowed=Ssl,
                                              ssl_key=SslKey,
                                              ssl_cert=SslCert,
-                                             ssl_ca_cert=CaSslCert},
+                                             ssl_ca_cert=CaSslCert,
+                                             utf8=UTF8},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -529,13 +531,18 @@ ftp_command(Mod, Socket, State, xrmd, Arg) ->
 
 ftp_command(Mod, Socket, State, feat, Arg) ->
     respond_raw(Socket, "211-Features"),
-    respond_raw(Socket, " UTF8"),
+    case State#connection_state.utf8 of
+        true ->
+            respond_raw(Socket, " UTF8");
+        _ ->
+            ok
+    end,
     respond(Socket, 211, "End"),
     {ok, State};
 
 ftp_command(Mod, Socket, State, opts, Arg) ->
     case string:to_upper(Arg) of
-        "UTF8 ON" ->
+        "UTF8 ON" when State#connection_state.utf8 =:= true ->
             respond(Socket, 200, "Accepted");
         _ ->
             respond(Socket, 501)
