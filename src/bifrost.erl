@@ -1193,7 +1193,7 @@ remove_directory_test() ->
                                  end),
 
                      login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"},
-                                              {"RMD /bison/burgers", "550 Requested file action not taken.\r\n"}]),
+                                              {"RMD /bison/burgers", "550 Requested action not taken.\r\n"}]),
                      step(ControlPid),
 
                      meck:expect(fake_server,
