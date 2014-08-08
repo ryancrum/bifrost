@@ -85,7 +85,12 @@ listen_socket(Port, TcpOpts) ->
 await_connections(Listen, Supervisor) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
-            Supervisor ! {new_connection, Socket};
+            Supervisor ! {new_connection, self(), Socket},
+            receive
+                {ack, Worker} ->
+                    %% ssl:ssl_accept/2 will return {error, not_owner} otherwise
+                    ok = gen_tcp:controlling_process(Socket, Worker)
+            end;
         _Error ->
             exit(bad_accept)
     end,
@@ -94,10 +99,11 @@ await_connections(Listen, Supervisor) ->
 supervise_connections(InitialState) ->
     process_flag(trap_exit, true),
     receive
-        {new_connection, Socket} ->
-            proc_lib:spawn_link(?MODULE,
+        {new_connection, Acceptor, Socket} ->
+            Worker = proc_lib:spawn_link(?MODULE,
                                 establish_control_connection,
-                                [Socket, InitialState]);
+                                [Socket, InitialState]),
+            Acceptor ! {ack, Worker};
         {'EXIT', _Pid, normal} -> % not a crash
             ok;
         {'EXIT', _Pid, shutdown} -> % manual termination, not a crash
