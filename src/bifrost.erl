@@ -33,6 +33,7 @@ init([HookModule, Opts]) ->
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
+    UTF8 = proplists:get_value(utf8, Opts),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = default(proplists:get_value(ip_address, Opts), get_socket_addr(Listen)),
@@ -41,7 +42,8 @@ init([HookModule, Opts]) ->
                                              ssl_allowed=Ssl,
                                              ssl_key=SslKey,
                                              ssl_cert=SslCert,
-                                             ssl_ca_cert=CaSslCert},
+                                             ssl_ca_cert=CaSslCert,
+                                             utf8=UTF8},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -83,7 +85,12 @@ listen_socket(Port, TcpOpts) ->
 await_connections(Listen, Supervisor) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
-            Supervisor ! {new_connection, Socket};
+            Supervisor ! {new_connection, self(), Socket},
+            receive
+                {ack, Worker} ->
+                    %% ssl:ssl_accept/2 will return {error, not_owner} otherwise
+                    ok = gen_tcp:controlling_process(Socket, Worker)
+            end;
         _Error ->
             exit(bad_accept)
     end,
@@ -92,10 +99,11 @@ await_connections(Listen, Supervisor) ->
 supervise_connections(InitialState) ->
     process_flag(trap_exit, true),
     receive
-        {new_connection, Socket} ->
-            proc_lib:spawn_link(?MODULE,
+        {new_connection, Acceptor, Socket} ->
+            Worker = proc_lib:spawn_link(?MODULE,
                                 establish_control_connection,
-                                [Socket, InitialState]);
+                                [Socket, InitialState]),
+            Acceptor ! {ack, Worker};
         {'EXIT', _Pid, normal} -> % not a crash
             ok;
         {'EXIT', _Pid, shutdown} -> % manual termination, not a crash
@@ -326,7 +334,7 @@ ftp_command(Mod, Socket, State, cwd, Arg) ->
             respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450, "Unable to change directory"),
+            respond(Socket, 550, "Unable to change directory"),
             {ok, State}
     end;
 
@@ -336,7 +344,7 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450, "Unable to create directory"),
+            respond(Socket, 550, "Unable to create directory"),
             {ok, State}
     end;
 
@@ -372,7 +380,7 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             respond(Socket, 200),
             {ok, NewState};
         {error, _} ->
-            respond(Socket, 450),
+            respond(Socket, 550),
             {ok, State}
         end;
 
@@ -526,6 +534,30 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
+
+ftp_command(Mod, Socket, State, feat, Arg) ->
+    respond_raw(Socket, "211-Features"),
+    case State#connection_state.utf8 of
+        true ->
+            respond_raw(Socket, " UTF8");
+        _ ->
+            ok
+    end,
+    respond(Socket, 211, "End"),
+    {ok, State};
+
+ftp_command(Mod, Socket, State, opts, Arg) ->
+    case string:to_upper(Arg) of
+        "UTF8 ON" when State#connection_state.utf8 =:= true ->
+            respond(Socket, 200, "Accepted");
+        _ ->
+            respond(Socket, 501)
+    end,
+    {ok, State};
+
+ftp_command(Mod, Socket, State, size, Arg) ->
+    respond(Socket, 550),
+    {ok, State};
 
 ftp_command(_, Socket, State, Command, _Arg) ->
     error_logger:warning_report({bifrost, unrecognized_command, Command}),
@@ -953,7 +985,7 @@ mkdir_test() ->
                                   end),
                       login_test_user(ControlPid,
                                       [{"MKD test_dir", "250 \"test_dir\" directory created.\r\n"},
-                                       {"MKD test_dir_2", "450 Unable to create directory\r\n"}]),
+                                       {"MKD test_dir_2", "550 Unable to create directory\r\n"}]),
                       step(ControlPid),
 
                       meck:expect(fake_server,
@@ -982,7 +1014,7 @@ cwd_test() ->
                                   fun(_) -> "/meat/bovine/bison" end),
                       login_test_user(ControlPid,
                                       [{"CWD /meat/bovine/bison", "250 directory changed to \"/meat/bovine/bison\"\r\n"},
-                                       {"CWD /meat/bovine/auroch", "450 Unable to change directory\r\n"}]),
+                                       {"CWD /meat/bovine/auroch", "550 Unable to change directory\r\n"}]),
 
                       step(ControlPid),
 
@@ -1161,7 +1193,7 @@ remove_directory_test() ->
                                  end),
 
                      login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"},
-                                              {"RMD /bison/burgers", "450 Requested file action not taken.\r\n"}]),
+                                              {"RMD /bison/burgers", "550 Requested action not taken.\r\n"}]),
                      step(ControlPid),
 
                      meck:expect(fake_server,

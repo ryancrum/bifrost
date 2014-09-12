@@ -16,7 +16,8 @@
           protection_mode = clear,
           pb_size = 0,
           control_socket = undefined,
-          ssl_socket = undefined
+          ssl_socket = undefined,
+          utf8 = false
          }).
 
 -record(file_info,
