@@ -535,7 +535,7 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
 
-ftp_command(Mod, Socket, State, feat, Arg) ->
+ftp_command(_Mod, Socket, State, feat, _Arg) ->
     respond_raw(Socket, "211-Features"),
     case State#connection_state.utf8 of
         true ->
@@ -546,7 +546,7 @@ ftp_command(Mod, Socket, State, feat, Arg) ->
     respond(Socket, 211, "End"),
     {ok, State};
 
-ftp_command(Mod, Socket, State, opts, Arg) ->
+ftp_command(_Mod, Socket, State, opts, Arg) ->
     case string:to_upper(Arg) of
         "UTF8 ON" when State#connection_state.utf8 =:= true ->
             respond(Socket, 200, "Accepted");
@@ -555,7 +555,7 @@ ftp_command(Mod, Socket, State, opts, Arg) ->
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, size, Arg) ->
+ftp_command(_Mod, Socket, State, size, _Arg) ->
     respond(Socket, 550),
     {ok, State};
 
