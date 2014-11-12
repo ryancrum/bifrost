@@ -14,28 +14,20 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
-default(Expr, Default) ->
-    case Expr of
-        undefined ->
-            Default;
-        _ ->
-            Expr
-    end.
-
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
 % gen_server callbacks implementation
 init([HookModule, Opts]) ->
-    Port = default(proplists:get_value(port, Opts), 21),
-    Ssl = default(proplists:get_value(ssl, Opts), false),
+    Port = proplists:get_value(port, Opts, 21),
+    Ssl = proplists:get_value(ssl, Opts, false),
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
-    UTF8 = proplists:get_value(utf8, Opts),
+    UTF8 = proplists:get_value(utf8, Opts, false),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
-            IpAddress = default(proplists:get_value(ip_address, Opts), get_socket_addr(Listen)),
+            IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
             InitialState = #connection_state{module=HookModule,
                                              ip_address=IpAddress,
                                              ssl_allowed=Ssl,
