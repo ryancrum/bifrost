@@ -24,7 +24,7 @@ init([HookModule, Opts]) ->
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
-    UTF8 = proplists:get_value(utf8, Opts, false),
+    UTF8 = proplists:get_value(utf8, Opts, true),
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
@@ -165,11 +165,11 @@ respond(Socket, ResponseCode) ->
     respond(Socket, ResponseCode, response_code_string(ResponseCode) ++ ".").
 
 respond({SocketMod, Socket}, ResponseCode, Message) ->
-    Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
+    Line = integer_to_list(ResponseCode) ++ " " ++ to_utf8(Message) ++ "\r\n",
     SocketMod:send(Socket, Line).
 
 respond_raw({SocketMod, Socket}, Line) ->
-    SocketMod:send(Socket, Line ++ "\r\n").
+    SocketMod:send(Socket, to_utf8(Line) ++ "\r\n").
 
 ssl_options(State) ->
     [{keyfile, State#connection_state.ssl_key},
@@ -270,9 +270,20 @@ ftp_result(_State, Data) ->
 
 %% FTP COMMANDS
 
-ftp_command(Socket, State, Command, Arg) ->
+ftp_command(Socket, State, Command, RawArg) ->
     Mod = State#connection_state.module,
-    ftp_command(Mod, Socket, State, Command, Arg).
+	case from_utf8(RawArg, State#connection_state.utf8) of
+		{error, List, _RestData} ->
+			error_logger:warning_report({bifrost, invalid_utf8, List}),
+			respond(Socket, 501),
+			{ok, State};
+		{incomplete, List, _Binary} ->
+			error_logger:warning_report({bifrost, incomplete_utf8, List}),
+			respond(Socket, 501),
+			{ok, State};
+		Arg ->
+	    	ftp_command(Mod, Socket, State, Command, Arg)
+	end.
 
 ftp_command(_Mod, Socket, _State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
@@ -619,14 +630,14 @@ parse_input(Input) ->
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
-                              file_info_to_string(Info) ++ "\r\n") end,
+                              to_utf8(file_info_to_string(Info)) ++ "\r\n") end,
               Files),
     ok.
 
 list_file_names_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
-                              Info#file_info.name ++ "\r\n") end,
+                              to_utf8(Info#file_info.name) ++ "\r\n") end,
               Files),
     ok.
 
@@ -800,6 +811,22 @@ format_error(Message, undef) ->
 
 format_error(Message, Reason) ->
 	format("~ts (~p).", [Message, Reason]).
+
+from_utf8(String, true) ->
+	unicode:characters_to_list(erlang:list_to_binary(String), utf8);
+
+from_utf8(String, false) ->
+	String.
+
+to_utf8(String) ->
+	to_utf8(String, true).
+
+to_utf8(String, true) ->
+	erlang:binary_to_list(unicode:characters_to_binary(String, utf8));
+
+to_utf8(String, false) ->
+	[if C > 255 orelse C<0 -> $?; true -> C end || C <- String].
+
 
 %===============================================================================
 % EUNIT TESTS
@@ -1530,5 +1557,105 @@ quit_test() ->
               end
              ),
     execute(Child).
+
+feat_test() ->
+   setup(),
+   ControlPid = self(),
+   Child = spawn_link(
+           fun() ->
+               login_test_user(ControlPid,
+                   [   {"FEAT", "211-Features\r\n"},
+                       {resp, socket, " UTF8\r\n" },
+                       {resp, socket, "211 End\r\n" }]),
+               step(ControlPid),
+               finish(ControlPid)
+           end),
+   execute(Child).
+
+%?dataSocketTest(utf8_success_test).
+utf8_success_test(Mode) ->
+   setup(),
+   ControlPid = self(),
+   Child = spawn_link(
+           fun() ->
+               FileName = "Молоко-Яйки", %milk-eggs
+               UtfFileName = to_utf8(FileName), %milk-eggs
+               BinData = <<"SOME DATA HERE">>,
+
+               Script =[   {"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
+                           {"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
+                           {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
+                           {req, data_socket, BinData},
+                           {resp, socket, "226 Closing data connection.\r\n"},
+                           {"LIST", "150 File status okay; about to open data connection.\r\n"},
+                           {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
+                           {resp, socket, "226 Closing data connection.\r\n"},
+                           {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}
+                       ],
+
+               meck:expect(fake_server,current_directory, fun(_) -> FileName end),
+
+               login_test_user_with_data_socket(ControlPid, Script, Mode),
+               step(ControlPid),
+
+               meck:expect(fake_server,change_directory,
+                               fun(State, InFileName) ->
+                                   ?assertEqual(InFileName, FileName),
+                                   {ok, State}
+                               end),
+               step(ControlPid),
+
+               meck:expect(fake_server,put_file,
+                               fun(S, InFileName, write, F) ->
+                                   ?assertEqual(InFileName, FileName),
+                                   {ok, Data, DataSize} = F(),
+                                   ?assertEqual(Data, BinData),
+                                   ?assertEqual(DataSize, size(BinData)),
+                                   {ok, S}
+                               end),
+
+               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+               step(ControlPid),
+
+                meck:expect(fake_server, put_file,
+                                fun(S, InFileName, done, notification) ->
+                                   ?assertEqual(InFileName, FileName),
+                                   {ok, S}
+                               end),
+
+               meck:expect(fake_server, list_files,
+                               fun(_, _) ->
+                                   [#file_info{type=dir,name=FileName,mode=200,gid=0,uid=0,
+                                               mtime={{3019,12,12},{12,12,12}},size=0}]
+                               end),
+
+               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+               step(ControlPid),
+               finish(ControlPid)
+           end),
+   execute(Child).
+
+%?dataSocketTest(utf8_failure_test).
+utf8_failure_test(Mode) ->
+   setup(),
+   ControlPid = self(),
+   Child = spawn_link(
+           fun() ->
+               FileName = "Молоко-Яйки", %milk-eggs
+               UtfFileNameOk = to_utf8(FileName), %milk-eggs
+               { UtfFileName, _ } = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
+
+               Script =[   {"CWD " ++ UtfFileName, "501 Syntax error in parameters or arguments.\r\n"}],
+
+               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+               meck:expect(error_logger, warning_report, fun({bifrost, incomplete_utf8, _}) -> ok end),
+
+               login_test_user_with_data_socket(ControlPid, Script, Mode),
+               step(ControlPid),
+               finish(ControlPid)
+           end),
+   execute(Child).
 
 -endif.

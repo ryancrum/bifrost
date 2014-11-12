@@ -17,7 +17,7 @@
           pb_size = 0,
           control_socket = undefined,
           ssl_socket = undefined,
-          utf8 = false
+          utf8 = true
          }).
 
 -record(file_info,
