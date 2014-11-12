@@ -138,6 +138,7 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
                                 {ack, HookPid} ->
                                     control_loop(HookPid, Socket, NewState);
                                 {done, HookPid} ->
+									disconnect(State, {error, breaked}),
                                     {error, closed}
                             end;
                        true ->
@@ -147,16 +148,25 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
                     control_loop(HookPid, NewSock, NewState);
                 {error, timeout} ->
                     respond(Socket, 412, "Timed out. Closing control connection."),
+					disconnect(State, {error, timeout}),
                     SocketMod:close(RawSocket),
                     {error, timeout};
                 {error, closed} ->
+                    disconnect(State, {error, closed}),
                     {error, closed};
+                {error, auth} ->
+                    disconnect(State, {error, auth}),
+                    SocketMod:close(RawSocket),
+                    {ok, quit};
                 quit ->
+					disconnect(State, exit),
                     SocketMod:close(RawSocket),
                     {ok, quit}
             end;
         {error, _Reason} ->
-            error_logger:warning_report({bifrost, connection_terminated})
+            disconnect(State, {error, _Reason}),
+            error_logger:warning_report({bifrost, connection_terminated}),
+            { error, _Reason }
     end.
 
 respond(Socket, ResponseCode) ->
@@ -236,15 +246,18 @@ pasv_connection(ControlSocket, State) ->
             end
     end.
 
+disconnect(State, Type) ->
+    Mod = State#connection_state.module,
+    Mod:disconnect(State, Type).
+
 %% FTP COMMANDS
 
 ftp_command(Socket, State, Command, Arg) ->
     Mod = State#connection_state.module,
     ftp_command(Mod, Socket, State, Command, Arg).
 
-ftp_command(Mod, Socket, State, quit, _) ->
+ftp_command(_Mod, Socket, _State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
-    Mod:disconnect(State),
     quit;
 
 ftp_command(_, Socket, State, pasv, _) ->
@@ -306,7 +319,7 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
             {ok, NewState#connection_state{authenticated_state=authenticated}};
         _ ->
             respond(Socket, 530, "Login incorrect."),
-            quit
+            {error, auth}
      end;
 
 %% ^^^ from this point down every command requires authentication ^^^
@@ -764,9 +777,10 @@ format_port(PortNumber) ->
 %===============================================================================
 % Testing Utility Functions
 setup() ->
-    meck:new(gen_tcp, [unstick]),
-    meck:new(inet, [unstick, passthrough]),
-    meck:new(fake_server, [non_strict]).
+    ok = meck:new(gen_tcp, [unstick]),
+    ok = meck:new(inet, [unstick, passthrough]),
+    ok = meck:new(fake_server, [non_strict]),
+	ok = meck:expect(fake_server, disconnect, fun(_, {error, breaked}) -> ok end).
 
 execute(ListenerPid) ->
     receive
@@ -907,8 +921,10 @@ authenticate_failure_test() ->
                   				{"PASS meatmeat", "530 Login incorrect.\r\n"}]),
 				ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
 				ok = meck:expect(fake_server, login, fun(_, "meat", "meatmeat") -> {error} end),
+				ok = meck:expect(fake_server, disconnect, fun(_, {error, auth}) -> ok end),
 				{ok, State} = step(ControlPid),
 				?assertMatch(#connection_state{authenticated_state=unauthenticated}, State),
+				step(ControlPid), % last event will  be disconnect with reason auth fail
 				finish(ControlPid)
               end),
 
@@ -1433,7 +1449,7 @@ quit_test() ->
               fun () ->
                       meck:expect(fake_server,
                                   disconnect,
-                                  fun(_) ->
+                                  fun(_, exit) ->
                                           ok
                                   end),
                       login_test_user(ControlPid,

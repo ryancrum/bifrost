@@ -26,7 +26,7 @@
          rename_file/3,
          site_command/3,
          site_help/1,
-         disconnect/1]).
+         disconnect/2]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -92,7 +92,7 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
-disconnect(_) ->
+disconnect(_, Reason) ->
     ok.
 
 % Delete a file

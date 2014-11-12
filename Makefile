@@ -1,10 +1,10 @@
 all: compile
 
 compile:
-	rebar -v compile
+	rebar -v compile skip_deps=true
 
 test:
-	rebar -v eunit
+	rebar -v eunit skip_deps=true
 
 clean:
-	rebar clean
+	rebar clean skip_deps=true
