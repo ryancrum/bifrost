@@ -8,7 +8,6 @@
 
 -behaviour(gen_server).
 -include("bifrost.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 -export([start_link/2, establish_control_connection/2, await_connections/2, supervise_connections/1]).
 
@@ -756,12 +755,14 @@ format_port(PortNumber) ->
     [A,B] = binary_to_list(<<PortNumber:16>>),
     {A, B}.
 
+%===============================================================================
+% EUNIT TESTS
+%-------------------------------------------------------------------------------
 -ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 
-%% EUNIT TESTS %%
-
-% Testing Utility Functions %
-
+%===============================================================================
+% Testing Utility Functions
 setup() ->
     meck:new(gen_tcp, [unstick]),
     meck:new(inet, [unstick, passthrough]),
@@ -769,31 +770,21 @@ setup() ->
 
 execute(ListenerPid) ->
     receive
-        go ->
+        {ack, ListenerPid} ->
             control_loop(ListenerPid,
                          {gen_tcp, socket},
                          #connection_state{module=fake_server,ip_address={127,0,0,1}}),
             meck:validate(fake_server),
-            meck:validate(gen_tcp),
-            meck:unload(fake_server),
-            meck:unload(inet),
-            meck:unload(gen_tcp)
-    end.
+            meck:validate(gen_tcp)
+    end,
+	meck:unload(fake_server),
+	meck:unload(inet),
+	meck:unload(gen_tcp).
 
 -define(dataSocketTest(TEST_NAME),
         TEST_NAME() ->
                TEST_NAME(active),
                TEST_NAME(passive)).
-
-mock_socket_response(S, R) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S2, R2) ->
-                        ?assertEqual(S, S2),
-                        ?assertEqual(R,
-                                     R2),
-                        ok
-                end).
 
 % Awkward, monadic interaction sequence testing
 script_dialog([]) ->
@@ -834,10 +825,11 @@ script_dialog([{req, Socket, Request} | Rest]) ->
 
 % executes the next step in the test script
 step(Pid) ->
-    Pid ! {ack, self()},
+    Pid ! {ack, self()},  	% 1st ACK will be 'eaten' by execute
+							% so valid sequence will be
     receive
-        {new_state, _, State} ->
-            State;
+        {new_state, Pid, State} ->
+            {ok, State};
         _ ->
             ?assert(fail)
     end.
@@ -847,6 +839,7 @@ finish(Pid) ->
     Pid ! {done, self()}.
 
 
+%===============================================================================
 % Unit Tests %
 
 strip_newlines_test() ->
@@ -874,11 +867,8 @@ parse_address_test() ->
     error = parse_address("MEAT MEAT").
 
 
+%===============================================================================
 % Functional/Integration Tests %
-
-authenticate_state(State) ->
-    State#connection_state{authenticated_state=authenticated}.
-
 login_test_user(SocketPid) ->
     login_test_user(SocketPid, []).
 
@@ -887,22 +877,16 @@ login_test_user(SocketPid, Script) ->
                    {resp, socket, "331 User name okay, need password.\r\n"},
                    {req, socket, "PASS meatmeat"},
                    {resp, socket, "230 User logged in, proceed.\r\n"}] ++ Script),
-    SocketPid ! go,
-    receive
-        {new_state, _, _} ->
-            ok
-    end,
-    SocketPid ! {ack, self()},
 
+	step(SocketPid), % USER meat
     meck:expect(fake_server,
                 login,
                 fun(St, "meat", "meatmeat") ->
-                        {true, authenticate_state(St)}
+                        {true, St#connection_state{authenticated_state=authenticated}}
                 end),
-    receive
-        {new_state, _, _} ->
-            ok
-    end.
+	{ok, State1} = step(SocketPid),
+	?assertMatch(#connection_state{authenticated_state=authenticated}, State1),
+	{ok, State1}.
 
 authenticate_successful_test() ->
     setup(),
@@ -910,7 +894,6 @@ authenticate_successful_test() ->
     Child = spawn_link(
               fun() ->
                       login_test_user(ControlPid),
-                      ControlPid ! {ack, self()},
                       finish(ControlPid)
               end),
     execute(Child).
@@ -924,8 +907,8 @@ authenticate_failure_test() ->
                   				{"PASS meatmeat", "530 Login incorrect.\r\n"}]),
 				ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
 				ok = meck:expect(fake_server, login, fun(_, "meat", "meatmeat") -> {error} end),
-				ControlPid ! go,
-				?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+				{ok, State} = step(ControlPid),
+				?assertMatch(#connection_state{authenticated_state=unauthenticated}, State),
 				finish(ControlPid)
               end),
 
@@ -938,12 +921,13 @@ unauthenticated_test() ->
               fun() ->
     				script_dialog([	{"CWD /hamster", "530 Not logged in.\r\n"},
                   					{"MKD /unicorns", "530 Not logged in.\r\n"}]),
+					{ok, StateCmd} = step(ControlPid),
+					?assertMatch(#connection_state{authenticated_state=unauthenticated}, StateCmd),
 
-					ControlPid ! go,
-					?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
-					?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+					{ok, StateMkd} = step(ControlPid),
+					?assertMatch(#connection_state{authenticated_state=unauthenticated}, StateMkd),
 					finish(ControlPid)
-              end),
+				end),
 	execute(Child).
 
 mkdir_test() ->
