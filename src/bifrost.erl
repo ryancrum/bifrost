@@ -170,7 +170,7 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
     end.
 
 respond(Socket, ResponseCode) ->
-    respond(Socket, ResponseCode, response_code_string(ResponseCode)).
+    respond(Socket, ResponseCode, response_code_string(ResponseCode) ++ ".").
 
 respond({SocketMod, Socket}, ResponseCode, Message) ->
     Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
@@ -250,6 +250,32 @@ disconnect(State, Type) ->
     Mod = State#connection_state.module,
     Mod:disconnect(State, Type).
 
+
+-spec ftp_result(#connection_state{}, term()) -> term().
+ftp_result(State, {error}) ->
+	ftp_result(State, error);
+
+ftp_result(State, {error, error}) ->
+	ftp_result(State, error);
+
+ftp_result(State, error) ->
+	ftp_result(State, {error, State});
+
+ftp_result(_State, {error, #connection_state{}=NewState}) ->
+	{error, undef, NewState};
+
+ftp_result(State, {error, Reason}) ->
+	{error, Reason, State};
+
+ftp_result(_State, {error, Reason, #connection_state{}=NewState}) ->
+	{error, Reason, NewState};
+
+ftp_result(_State, {error, #connection_state{}=NewState, Reason}) ->
+	{error, Reason, NewState};
+
+ftp_result(_State, Data) ->
+	Data.
+
 %% FTP COMMANDS
 
 ftp_command(Socket, State, Command, Arg) ->
@@ -323,7 +349,6 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
      end;
 
 %% ^^^ from this point down every command requires authentication ^^^
-
 ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _) ->
     respond(Socket, 530),
     {ok, State};
@@ -341,31 +366,31 @@ ftp_command(Mod, Socket, State, cdup, _) ->
     ftp_command(Mod, Socket, State, cwd, "..");
 
 ftp_command(Mod, Socket, State, cwd, Arg) ->
-    case Mod:change_directory(State, Arg) of
+    case ftp_result(State, Mod:change_directory(State, Arg)) of
         {ok, NewState} ->
-            respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
+			respond(Socket, 250, "Directory changed to \"" ++ Mod:current_directory(NewState) ++ "\"."),
             {ok, NewState};
-        {error, _} ->
-            respond(Socket, 550, "Unable to change directory"),
-            {ok, State}
+        {error, Reason, NewState} ->
+            respond(Socket, 550, format_error("Unable to change directory", Reason)),
+            {ok, NewState}
     end;
 
 ftp_command(Mod, Socket, State, mkd, Arg) ->
-    case Mod:make_directory(State, Arg) of
+    case ftp_result(State, Mod:make_directory(State, Arg)) of
         {ok, NewState} ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
             {ok, NewState};
-        {error, _} ->
-            respond(Socket, 550, "Unable to create directory"),
-            {ok, State}
+        {error, Reason, NewState} ->
+            respond(Socket, 550, format_error("Unable to create directory", Reason)),
+            {ok, NewState}
     end;
 
 ftp_command(Mod, Socket, State, nlst, Arg) ->
-    case Mod:list_files(State, Arg) of
-        {error, NewState} ->
-            respond(Socket, 451),
+    case ftp_result(State, Mod:list_files(State, Arg)) of
+        {error, Reason, NewState} ->
+            respond(Socket, 451, format_error("Unable to list", Reason)),
             {ok, NewState};
-        Files ->
+        Files when is_list(Files)->
             DataSocket = data_connection(Socket, State),
             list_file_names_to_socket(DataSocket, Files),
             respond(Socket, 226),
@@ -374,11 +399,11 @@ ftp_command(Mod, Socket, State, nlst, Arg) ->
     end;
 
 ftp_command(Mod, Socket, State, list, Arg) ->
-    case Mod:list_files(State, Arg) of
-        {error, _} ->
-            respond(Socket, 451),
-            {ok, State};
-        Files ->
+    case ftp_result(State, Mod:list_files(State, Arg)) of
+        {error, Reason, NewState} ->
+            respond(Socket, 451, format_error("Unable to list", Reason)),
+            {ok, NewState};
+        Files when is_list(Files)->
             DataSocket = data_connection(Socket, State),
             list_files_to_socket(DataSocket, Files),
             respond(Socket, 226),
@@ -387,13 +412,13 @@ ftp_command(Mod, Socket, State, list, Arg) ->
     end;
 
 ftp_command(Mod, Socket, State, rmd, Arg) ->
-    case Mod:remove_directory(State, Arg) of
+    case ftp_result(State, Mod:remove_directory(State, Arg)) of
         {ok, NewState} ->
             respond(Socket, 200),
             {ok, NewState};
-        {error, _} ->
-            respond(Socket, 550),
-            {ok, State}
+        {error, Reason, NewState} ->
+            respond(Socket, 550, format_error(550, Reason)),
+            {ok, NewState}
         end;
 
 ftp_command(_, Socket, State, syst, _) ->
@@ -401,13 +426,13 @@ ftp_command(_, Socket, State, syst, _) ->
     {ok, State};
 
 ftp_command(Mod, Socket, State, dele, Arg) ->
-    case Mod:remove_file(State, Arg) of
+    case ftp_result(State, Mod:remove_file(State, Arg)) of
         {ok, NewState} ->
             respond(Socket, 200),
             {ok, NewState};
-        {error, _} ->
-            respond(Socket, 450),
-            {ok, State}
+        {error, Reason, NewState} ->
+            respond(Socket, 450, format_error("Unable to delete file", Reason)),
+            {ok, NewState}
         end;
 
 ftp_command(Mod, Socket, State, stor, Arg) ->
@@ -420,13 +445,13 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
                           done
                   end
           end,
-    RetState = case Mod:put_file(State, Arg, write, Fun) of
+    RetState = case ftp_result(State, Mod:put_file(State, Arg, write, Fun)) of
                    {ok, NewState} ->
                        respond(Socket, 226),
                        NewState;
-                   {error, Info} ->
-                       respond(Socket, 451, io_lib:format("Error ~p when storing a file.", [Info])),
-                       State
+					{error, Reason, NewState} ->
+                       respond(Socket, 451, format("Error ~p when storing a file.", [Reason])),
+                       NewState
                end,
     bf_close(DataSocket),
     {ok, RetState};
@@ -444,33 +469,35 @@ ftp_command(_, Socket, State, type, Arg) ->
 
 ftp_command(Mod, Socket, State, site, Arg) ->
     [Command | Sargs] = string:tokens(Arg, " "),
-    case Mod:site_command(State, list_to_atom(string:to_lower(Command)), string:join(Sargs, " ")) of
+    case ftp_result(State, Mod:site_command(State, list_to_atom(string:to_lower(Command)), string:join(Sargs, " "))) of
         {ok, NewState} ->
             respond(Socket, 200),
             {ok, NewState};
-        {error, not_found} ->
+        {error, not_found, NewState} ->
             respond(Socket, 500),
-            {ok, State};
-        {error, _} ->
-            respond(Socket, 501, "Error completing command."),
-            {ok, State}
+            {ok, NewState};
+        {error, Reason, NewState} ->
+            respond(Socket, 501, format("Error completing command (~p).", [Reason])),
+            {ok, NewState}
     end;
 
 ftp_command(Mod, Socket, State, site_help, _) ->
-    case Mod:site_help(State) of
+    case ftp_result(State, Mod:site_help(State)) of
+        {error, Reason, NewState} ->
+            respond(Socket, 500, format_error("Unable to help site", Reason)),
+			{ok, NewState};
         {ok, []} ->
-            respond(Socket, 500);
-        {error, _} ->
-            respond(Socket, 500);
+            respond(Socket, 500),
+    		{ok, State};
         {ok, Commands} ->
             respond_raw(Socket, "214-The following commands are recognized"),
             lists:map(fun({CmdName, Descr}) ->
                               respond_raw(Socket, CmdName ++ " : " ++ Descr)
                       end,
                       Commands),
-            respond(Socket, 214, "Help OK")
-    end,
-    {ok, State};
+            respond(Socket, 214, "Help OK"),
+    		{ok, State}
+    end;
 
 ftp_command(Mod, Socket, State, help, Arg) ->
     LowerArg =  string:to_lower(Arg),
@@ -484,33 +511,33 @@ ftp_command(Mod, Socket, State, help, Arg) ->
 
 ftp_command(Mod, Socket, State, retr, Arg) ->
     try
-        case Mod:get_file(State, Arg) of
-              {ok, Fun} ->
+        case ftp_result(State, Mod:get_file(State, Arg)) of
+			{ok, Fun} ->
                   DataSocket = data_connection(Socket, State),
                   {ok, NewState} = write_fun(DataSocket, Fun),
                   respond(Socket, 226),
                   bf_close(DataSocket),
                   {ok, NewState};
-              error ->
-                  respond(Socket, 550),
-                  {ok, State}
+			{error, Reason, NewState} ->
+				  respond(Socket, 550, format_error("Unable to get file", Reason)),
+                  {ok, NewState}
         end
     catch
-        _ ->
+        Error ->
+			error_logger:error_msg("~w:get_file Exception ~p", [Mod, Error]),
               respond(Socket, 550),
               {ok, State}
     end;
 
 ftp_command(Mod, Socket, State, mdtm, Arg) ->
-    case Mod:file_info(State, Arg) of
+    case ftp_result(State, Mod:file_info(State, Arg)) of
         {ok, FileInfo} ->
-            respond(Socket,
-                    213,
-                    format_mdtm_date(FileInfo#file_info.mtime));
-        _ ->
-            respond(Socket, 550)
-    end,
-    {ok, State};
+            respond(Socket, 213, format_mdtm_date(FileInfo#file_info.mtime)),
+    		{ok, State};
+        {error, Reason, NewState} ->
+            respond(Socket, 550, format_error(550, Reason)),
+			{ok, NewState}
+    end;
 
 ftp_command(_, Socket, State, rnfr, Arg) ->
     respond(Socket, 350, "Ready for RNTO."),
@@ -523,8 +550,8 @@ ftp_command(Mod, Socket, State, rnto, Arg) ->
             {ok, State};
         Rnfr ->
             case Mod:rename_file(State, Rnfr, Arg) of
-                {error, _} ->
-                    respond(Socket, 550),
+                {error, Reason} ->
+				    respond(Socket, 550, io_lib:format("Unable to rename (~p).", [Reason])),
                     {ok, State};
                 {ok, NewState} ->
                     respond(Socket, 250, "Rename successful."),
@@ -622,44 +649,44 @@ bf_recv({SockMod, Socket}) ->
 
 % Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
-response_code_string(120) -> "Service ready in nnn minutes.";
-response_code_string(125) -> "Data connection alredy open; transfere starting.";
-response_code_string(150) -> "File status okay; about to open data connection.";
-response_code_string(200) -> "Command okay.";
-response_code_string(202) -> "Command not implemented, superfluous at this site.";
-response_code_string(211) -> "System status, or system help reply.";
-response_code_string(212) -> "Directory status.";
-response_code_string(213) -> "File status.";
-response_code_string(214) -> "Help message.";
+response_code_string(120) -> "Service ready in nnn minutes";
+response_code_string(125) -> "Data connection alredy open; transfere starting";
+response_code_string(150) -> "File status okay; about to open data connection";
+response_code_string(200) -> "Command okay";
+response_code_string(202) -> "Command not implemented, superfluous at this site";
+response_code_string(211) -> "System status, or system help reply";
+response_code_string(212) -> "Directory status";
+response_code_string(213) -> "File status";
+response_code_string(214) -> "Help message";
 response_code_string(215) -> "UNIX system type";
-response_code_string(220) -> "Service ready for user.";
-response_code_string(221) -> "Service closing control connection.";
+response_code_string(220) -> "Service ready for user";
+response_code_string(221) -> "Service closing control connection";
 response_code_string(225) -> "Data connection open; no transfere in progress";
-response_code_string(226) -> "Closing data connection.";
-response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2).";
-response_code_string(230) -> "User logged in, proceed.";
-response_code_string(250) -> "Requested file action okay, completed.";
-response_code_string(257) -> "PATHNAME created.";
-response_code_string(331) -> "User name okay, need password.";
-response_code_string(332) -> "Need account for login.";
-response_code_string(350) -> "Requested file action pending further information.";
-response_code_string(421) -> "Service not available, closing control connection.";
-response_code_string(425) -> "Can't open data connection.";
-response_code_string(426) -> "Connection closed; transfere aborted.";
-response_code_string(450) -> "Requested file action not taken.";
-response_code_string(451) -> "Requested action not taken: local error in processing.";
-response_code_string(452) -> "Requested action not taken.";
-response_code_string(500) -> "Syntax error, command unrecognized.";
-response_code_string(501) -> "Syntax error in parameters or arguments.";
-response_code_string(502) -> "Command not implemented.";
-response_code_string(503) -> "Bad sequence of commands.";
-response_code_string(504) -> "Command not implemented for that parameter.";
-response_code_string(530) -> "Not logged in.";
-response_code_string(532) -> "Need account for storing files.";
-response_code_string(550) -> "Requested action not taken.";
-response_code_string(551) -> "Requested action aborted: page type unkown.";
-response_code_string(552) -> "Requested file action aborted.";
-response_code_string(553) -> "Requested action not taken.";
+response_code_string(226) -> "Closing data connection";
+response_code_string(227) -> "Entering Passive Mode (h1,h2,h3,h4,p1,p2)";
+response_code_string(230) -> "User logged in, proceed";
+response_code_string(250) -> "Requested file action okay, completed";
+response_code_string(257) -> "PATHNAME created";
+response_code_string(331) -> "User name okay, need password";
+response_code_string(332) -> "Need account for login";
+response_code_string(350) -> "Requested file action pending further information";
+response_code_string(421) -> "Service not available, closing control connection";
+response_code_string(425) -> "Can't open data connection";
+response_code_string(426) -> "Connection closed; transfere aborted";
+response_code_string(450) -> "Requested file action not taken";
+response_code_string(451) -> "Requested action not taken: local error in processing";
+response_code_string(452) -> "Requested action not taken";
+response_code_string(500) -> "Syntax error, command unrecognized";
+response_code_string(501) -> "Syntax error in parameters or arguments";
+response_code_string(502) -> "Command not implemented";
+response_code_string(503) -> "Bad sequence of commands";
+response_code_string(504) -> "Command not implemented for that parameter";
+response_code_string(530) -> "Not logged in";
+response_code_string(532) -> "Need account for storing files";
+response_code_string(550) -> "Requested action not taken";
+response_code_string(551) -> "Requested action aborted: page type unkown";
+response_code_string(552) -> "Requested file action aborted";
+response_code_string(553) -> "Requested action not taken";
 response_code_string(_) -> "N/A".
 
 % Taken from jungerl/ftpd
@@ -767,6 +794,20 @@ addr6(_, _) -> error.
 format_port(PortNumber) ->
     [A,B] = binary_to_list(<<PortNumber:16>>),
     {A, B}.
+
+-spec format(string(), list()) -> string().
+format(FormatString, Args) ->
+	lists:flatten(io_lib:format(FormatString, Args)).
+
+-spec format_error(integer() | string(), term()) -> string().
+format_error(Code, Reason) when is_integer(Code) ->
+	format_error(response_code_string(Code), Reason);
+
+format_error(Message, undef) ->
+	Message ++ ".";
+
+format_error(Message, Reason) ->
+	format("~ts (~p).", [Message, Reason]).
 
 %===============================================================================
 % EUNIT TESTS
@@ -880,6 +921,36 @@ parse_address_test() ->
     {ok, {{127,0,0,1}, 2000}} = parse_address("127,0,0,1,7,208"),
     error = parse_address("MEAT MEAT").
 
+ftp_result_test() ->
+	% all results from gen_bifrost_server.erl
+	State 		= #connection_state{authenticated_state=unauthenticated},
+	NewState	= State#connection_state{authenticated_state=authenticated},
+	?assertEqual({ok, NewState}, ftp_result(State, {ok, NewState})),
+
+	?assertEqual({error, undef, NewState}, 	ftp_result(State, {error, NewState})),
+
+	?assertEqual({error, "Error", 	State}, ftp_result(State, {error, "Error"})),
+	?assertEqual({error, not_found, State}, ftp_result(State, {error, not_found})),
+
+	?assertEqual({error, not_found, NewState}, ftp_result(State, {error, not_found, NewState})),
+	?assertEqual({error, not_found, NewState}, ftp_result(State, {error, NewState, not_found})),
+
+	% a special results
+	?assertEqual("/path", ftp_result(State, "/path")), %current_directory
+
+	?assertEqual({error, undef, NewState}, ftp_result(State, {error, NewState})), %list_files
+	?assertEqual([], ftp_result(State, [])), %list_files
+
+	Fun = fun(_BytesCount) -> ok end,
+	?assertEqual({error, undef, State}, ftp_result(State, error)), %get_file
+	?assertMatch({ok, Fun}, ftp_result(State, {ok, Fun})), %get_file
+
+	?assertMatch({ok, file_info}, ftp_result(State, {ok, file_info})),	%file_info
+	?assertMatch({error, "ErrorCause", State}, ftp_result(State, {error, "ErrorCause"})),	%file_info
+
+	?assertMatch({ok, [help_info]}, ftp_result(State, {ok, [help_info]})),			%site_help
+	?assertMatch({error, undef, NewState}, ftp_result(State, {error, NewState})),	%site_help
+	ok.
 
 %===============================================================================
 % Functional/Integration Tests %
@@ -958,7 +1029,7 @@ mkdir_test() ->
                                   end),
                       login_test_user(ControlPid,
                                       [{"MKD test_dir", "250 \"test_dir\" directory created.\r\n"},
-                                       {"MKD test_dir_2", "550 Unable to create directory\r\n"}]),
+                                       {"MKD test_dir_2", "550 Unable to create directory.\r\n"}]),
                       step(ControlPid),
 
                       meck:expect(fake_server,
@@ -979,22 +1050,30 @@ cwd_test() ->
               fun() ->
                       meck:expect(fake_server,
                                   change_directory,
-                                  fun(State, "/meat/bovine/bison") ->
-                                          {ok, State}
+                                  fun	(State, "/meat/bovine/bison") ->
+                                        	{ok, State}
                                   end),
                       meck:expect(fake_server,
                                   current_directory,
                                   fun(_) -> "/meat/bovine/bison" end),
-                      login_test_user(ControlPid,
-                                      [{"CWD /meat/bovine/bison", "250 directory changed to \"/meat/bovine/bison\"\r\n"},
-                                       {"CWD /meat/bovine/auroch", "550 Unable to change directory\r\n"}]),
 
+                      login_test_user(ControlPid,
+							[{"CWD /meat/bovine/bison", "250 Directory changed to \"/meat/bovine/bison\".\r\n"},
+                            {"CWD /meat/bovine/auroch", "550 Unable to change directory.\r\n"},
+                            {"CWD /meat/bovine/elefant", "550 Unable to change directory (denied).\r\n"}]),
                       step(ControlPid),
 
                       meck:expect(fake_server,
                                   change_directory,
                                   fun(State, "/meat/bovine/auroch") ->
                                           {error, State}
+                                  end),
+                      step(ControlPid),
+
+                      meck:expect(fake_server,
+                                  change_directory,
+                                 fun(_State, "/meat/bovine/elefant") ->
+                                          {error, denied}
                                   end),
                       step(ControlPid),
                       finish(ControlPid)
@@ -1013,9 +1092,9 @@ cdup_test() ->
                                   current_directory,
                                   fun(_) -> "/meat" end),
                       login_test_user(ControlPid,
-                                      [{"CDUP", "250 directory changed to \"/meat\"\r\n"},
-                                       {"CDUP", "250 directory changed to \"/\"\r\n"},
-                                       {"CDUP", "250 directory changed to \"/\"\r\n"}]),
+                                      [{"CDUP", "250 Directory changed to \"/meat\".\r\n"},
+                                       {"CDUP", "250 Directory changed to \"/\".\r\n"},
+                                       {"CDUP", "250 Directory changed to \"/\".\r\n"}]),
                       step(ControlPid),
 
                       meck:expect(fake_server,
@@ -1192,7 +1271,7 @@ remove_file_test() ->
                                  end),
 
                      login_test_user(ControlPid, [{"DELE cheese.txt", "200 Command okay.\r\n"},
-                                              {"DELE cheese.txt", "450 Requested file action not taken.\r\n"}]),
+                                              {"DELE cheese.txt", "450 Unable to delete file.\r\n"}]),
                      step(ControlPid),
 
                      meck:expect(fake_server,

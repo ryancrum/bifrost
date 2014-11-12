@@ -9,7 +9,7 @@
 
 behaviour_info(callbacks) ->
     % Path :: String
-    % State Change :: {ok, State} OR {error, State}
+    % State Change :: {ok, NewState} OR {error, NewState} OR {error, Reason} OR {error, Reason, NewState}
     % File Name :: String
     % HelpInfo :: {Name, Description}
     [{init, 2}, % State, PropList (options) -> State
@@ -26,6 +26,6 @@ behaviour_info(callbacks) ->
      {rename_file, 3}, % State, From Path, To Path -> State Change
      {site_command, 3}, % State, Command Name String, Command Args String -> State Change
      {site_help, 1}, % State -> {ok, [HelpInfo]} OR {error, State}
-     {disconnect, 2}]; % State, exit (QUIT command from client) or { error, Reason }  -> State Change
+     {disconnect, 2}]; % State, exit (QUIT command from client) or { error, Reason }  -> *unused* State Change
 behaviour_info(_) ->
     undefined.
