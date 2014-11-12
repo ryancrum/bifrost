@@ -765,7 +765,7 @@ format_port(PortNumber) ->
 setup() ->
     meck:new(gen_tcp, [unstick]),
     meck:new(inet, [unstick, passthrough]),
-    meck:new(fake_server).
+    meck:new(fake_server, [non_strict]).
 
 execute(ListenerPid) ->
     receive
@@ -836,8 +836,8 @@ script_dialog([{req, Socket, Request} | Rest]) ->
 step(Pid) ->
     Pid ! {ack, self()},
     receive
-        {new_state, _, _} ->
-            ok;
+        {new_state, _, State} ->
+            State;
         _ ->
             ?assert(fail)
     end.
@@ -917,61 +917,34 @@ authenticate_successful_test() ->
 
 authenticate_failure_test() ->
     setup(),
-    meck:expect(gen_tcp,
-                close,
-                fun(socket) -> ok end),
-    meck:expect(fake_server,
-                login,
-                fun(_, "meat", "meatmeat") ->
-                        {error}
-                end),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      receive
-                          {new_state, _, #connection_state{user_name="meat"}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()},
-
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
-                      finish(ControlPid)
+    			script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
+                  				{"PASS meatmeat", "530 Login incorrect.\r\n"}]),
+				ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
+				ok = meck:expect(fake_server, login, fun(_, "meat", "meatmeat") -> {error} end),
+				ControlPid ! go,
+				?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+				finish(ControlPid)
               end),
-    script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
-                  {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {ok, quit} = control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
-    meck:validate(fake_server),
-    meck:validate(gen_tcp),
-    meck:unload(inet),
-    meck:unload(fake_server),
-    meck:unload(gen_tcp).
+
+	execute(Child).
 
 unauthenticated_test() ->
-    meck:new(gen_tcp, [unstick]),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      mock_socket_response(socket, "530 Not logged in.\r\n"),
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()},
+    				script_dialog([	{"CWD /hamster", "530 Not logged in.\r\n"},
+                  					{"MKD /unicorns", "530 Not logged in.\r\n"}]),
 
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()}
+					ControlPid ! go,
+					?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+					?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+					finish(ControlPid)
               end),
-    script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"},
-                  {"MKD /unicorns", "530 Not logged in.\r\n"}]),
-    control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
-    meck:validate(gen_tcp),
-    meck:unload(gen_tcp).
+	execute(Child).
 
 mkdir_test() ->
     setup(),
