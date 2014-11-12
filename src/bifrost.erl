@@ -27,7 +27,7 @@ default(Expr, Default) ->
 
 -spec ucs2_to_utf8(string()) -> string().
 ucs2_to_utf8(String) ->
-	erlang:binary_to_list(unicode:characters_to_binary(String, utf8)).
+    erlang:binary_to_list(unicode:characters_to_binary(String, utf8)).
 
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
@@ -247,18 +247,18 @@ pasv_connection(ControlSocket, State) ->
 
 ftp_command(Socket, State, Command, RawArg) ->
     Mod = State#connection_state.module,
-	case unicode:characters_to_list(erlang:list_to_binary(RawArg), utf8) of
-		{ error, List, _RestData } ->
-			error_logger:warning_report({bifrost, invalid_utf8, List}),
-			respond(Socket, 501),
-		    {ok, State};
-		{ incomplete, List, _Binary } ->
-			error_logger:warning_report({bifrost, incomplete_utf8, List}),
-			respond(Socket, 501),
-		    {ok, State};
-		Arg ->
-			ftp_command(Mod, Socket, State, Command, Arg)
-	end.
+    case unicode:characters_to_list(erlang:list_to_binary(RawArg), utf8) of
+        { error, List, _RestData } ->
+            error_logger:warning_report({bifrost, invalid_utf8, List}),
+            respond(Socket, 501),
+            {ok, State};
+        { incomplete, List, _Binary } ->
+            error_logger:warning_report({bifrost, incomplete_utf8, List}),
+            respond(Socket, 501),
+            {ok, State};
+        Arg ->
+            ftp_command(Mod, Socket, State, Command, Arg)
+    end.
 
 ftp_command(Mod, Socket, State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
@@ -330,11 +330,11 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
 %% based of rfc2389
 ftp_command(_Mod, Socket, State, feat, _Arg) ->
     respond_raw(Socket, "211- Extensions supported:"),
-	lists:map(	fun	({Feature, FeatureParams}) -> respond_raw(Socket, " " ++ Feature ++ " " ++ FeatureParams);
-					(Feature) -> respond_raw(Socket, " " ++ Feature)
-				end,
-			?FEATURES),
-	respond(Socket, 211, "End"),
+    lists:map(	fun	({Feature, FeatureParams}) -> respond_raw(Socket, " " ++ Feature ++ " " ++ FeatureParams);
+                      (Feature) -> respond_raw(Socket, " " ++ Feature)
+                end,
+                ?FEATURES),
+    respond(Socket, 211, "End"),
     {ok, State};
 
 %% ^^^ from this point down every command requires authentication ^^^
@@ -686,7 +686,7 @@ file_info_to_string(Info) ->
         format_number(Info#file_info.gid,5,$ ) ++ " "  ++
         format_number(Info#file_info.size,8,$ ) ++ " " ++
         format_date(Info#file_info.mtime) ++ " " ++
-		Info#file_info.name.
+        Info#file_info.name.
 
 format_mdtm_date({{Year, Month, Day}, {Hours, Mins, Secs}}) ->
     lists:flatten(io_lib:format("~4..0B~2..0B~2..0B~2..0B~2..0B~2..0B",
@@ -1483,8 +1483,8 @@ feat_test() ->
               fun() ->
                       login_test_user(ControlPid,
                                       [{"FEAT", "211- Extensions supported:\r\n"},
-									   {resp, socket, " UTF8\r\n" },
-									   {resp, socket, "211 End\r\n" }]),
+                                       {resp, socket, " UTF8\r\n" },
+                                       {resp, socket, "211 End\r\n" }]),
                       step(ControlPid),
                       finish(ControlPid)
               end
@@ -1496,61 +1496,61 @@ utf8_success_test(Mode) ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-					FileName = "Молоко-Яйки", %milk-eggs
-					UtfFileName = ucs2_to_utf8(FileName), %milk-eggs 
-                    FileContent = <<"SOME DATA HERE">>,
+              fun() ->
+                      FileName = "Молоко-Яйки", % milk-eggs
+                      UtfFileName = ucs2_to_utf8(FileName), % milk-eggs
+                      FileContent = <<"SOME DATA HERE">>,
 
-                    Script =[	{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
-								{"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
-								{"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
-								{req, data_socket, FileContent },
-								{resp, socket, "226 Closing data connection.\r\n"},
-								{"LIST", "150 File status okay; about to open data connection.\r\n"},
-                                {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
-                                {resp, socket, "226 Closing data connection.\r\n"},
-								{"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}
-								],
+                      Script =[{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
+                               {"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
+                               {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
+                               {req, data_socket, FileContent },
+                               {resp, socket, "226 Closing data connection.\r\n"},
+                               {"LIST", "150 File status okay; about to open data connection.\r\n"},
+                               {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
+                               {resp, socket, "226 Closing data connection.\r\n"},
+                               {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}
+                              ],
 
-                    meck:expect(fake_server,
+                      meck:expect(fake_server,
                                   current_directory,
                                   fun(_) -> FileName end),
 
-                    login_test_user_with_data_socket(ControlPid, Script, Mode),
-					step(ControlPid),
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
 
-                    meck:expect(fake_server,
+                      meck:expect(fake_server,
                                   change_directory,
-                                  fun(State, InFileName) -> 
-										?assertEqual(InFileName, FileName), 
-										{ok, State} 
-								  end),
-					step(ControlPid),
+                                  fun(State, InFileName) ->
+                                          ?assertEqual(InFileName, FileName),
+                                          {ok, State}
+                                  end),
+                      step(ControlPid),
 
-                    meck:expect(fake_server,
-                                 put_file,
-                                 fun(S, InFileName, write, F) ->
-										 ?assertEqual(InFileName, FileName),
-                                         {ok, Data, DataSize} = F(),
-                                         ?assertEqual(Data, FileContent),
-                                         ?assertEqual(DataSize, size(FileContent)),
-                                         {ok, S}
-                                 end),
+                      meck:expect(fake_server,
+                                  put_file,
+                                  fun(S, InFileName, write, F) ->
+                                          ?assertEqual(InFileName, FileName),
+                                          {ok, Data, DataSize} = F(),
+                                          ?assertEqual(Data, FileContent),
+                                          ?assertEqual(DataSize, size(FileContent)),
+                                          {ok, S}
+                                  end),
 
-                    meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-					step(ControlPid),
+                      step(ControlPid),
 
-					meck:expect(fake_server,
-		                list_files,
-				        fun(_, _) ->
-                         [#file_info{type=dir,name=FileName,mode=200,gid=0,uid=0,mtime={{3019,12,12},{12,12,12}},size=0}]
-		                end),
+                      meck:expect(fake_server,
+                                  list_files,
+                                  fun(_, _) ->
+                                          [#file_info{type=dir,name=FileName,mode=200,gid=0,uid=0,mtime={{3019,12,12},{12,12,12}},size=0}]
+                                  end),
 
-                    meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-                    step(ControlPid),
-                    finish(ControlPid)
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
     execute(Child).
 
@@ -1559,19 +1559,18 @@ utf8_failure_test(Mode) ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-					FileName = "Молоко-Яйки", %milk-eggs
-					UtfFileNameOk = ucs2_to_utf8(FileName), %milk-eggs
-					{ UtfFileName, _ } = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
+              fun() ->
+                      FileName = "Молоко-Яйки", % milk-eggs
+                      UtfFileNameOk = ucs2_to_utf8(FileName), % milk-eggs
+                      { UtfFileName, _ } = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
 
-                    Script =[	{"CWD " ++ UtfFileName, "501 Syntax error in parameters or arguments.\r\n"}],
+                      Script =[{"CWD " ++ UtfFileName, "501 Syntax error in parameters or arguments.\r\n"}],
 
-                    meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-					%meck:expect(error_logger, report, fun({bifrost, incomplete_utf8, _}) -> ok end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-                    login_test_user_with_data_socket(ControlPid, Script, Mode),
-					step(ControlPid),
-                    finish(ControlPid)
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
               end),
     execute(Child).
 
