@@ -785,16 +785,6 @@ execute(ListenerPid) ->
                TEST_NAME(active),
                TEST_NAME(passive)).
 
-mock_socket_response(S, R) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S2, R2) ->
-                        ?assertEqual(S, S2),
-                        ?assertEqual(R,
-                                     R2),
-                        ok
-                end).
-
 % Awkward, monadic interaction sequence testing
 script_dialog([]) ->
     meck:expect(gen_tcp,
