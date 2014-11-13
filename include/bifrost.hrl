@@ -17,7 +17,8 @@
           pb_size = 0,
           control_socket = undefined,
           ssl_socket = undefined,
-          utf8 = true
+          utf8 = true,
+		  recv_block_size = 64*1024
          }).
 
 -record(file_info,

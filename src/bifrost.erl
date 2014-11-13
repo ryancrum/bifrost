@@ -19,22 +19,30 @@ start_link(HookModule, Opts) ->
 
 % gen_server callbacks implementation
 init([HookModule, Opts]) ->
+	DefState = #connection_state{module=HookModule},
+
     Port = proplists:get_value(port, Opts, 21),
-    Ssl = proplists:get_value(ssl, Opts, false),
+
+    Ssl = proplists:get_value(ssl, Opts, DefState#connection_state.ssl_allowed),
+
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
     CaSslCert = proplists:get_value(ca_ssl_cert, Opts),
-    UTF8 = proplists:get_value(utf8, Opts, true),
+
+    UTF8 = proplists:get_value(utf8, Opts, DefState#connection_state.utf8),
+	RecvBlockSize = proplists:get_value(recv_block_size, Opts, DefState#connection_state.recv_block_size),
+
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
-            InitialState = #connection_state{module=HookModule,
+            InitialState = DefState#connection_state{
                                              ip_address=IpAddress,
                                              ssl_allowed=Ssl,
                                              ssl_key=SslKey,
                                              ssl_cert=SslCert,
                                              ssl_ca_cert=CaSslCert,
-                                             utf8=UTF8},
+                                             utf8=UTF8,
+											 recv_block_size=RecvBlockSize},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -180,6 +188,14 @@ data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
         {ok, DataSocket} ->
+			% switch socket's block
+			case inet:setopts(DataSocket, [{recbuf, State#connection_state.recv_block_size}]) of
+				ok ->
+					ok;
+				{error, Reason} ->
+					error_logger:warning_report({bifrost, data_connection_socket, Reason})
+			end,
+
             case State#connection_state.protection_mode of
                 clear ->
                     {gen_tcp, DataSocket};
@@ -841,14 +857,14 @@ setup() ->
     ok = meck:new(gen_tcp, [unstick]),
     ok = meck:new(inet, [unstick, passthrough]),
     ok = meck:new(fake_server, [non_strict]),
+	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) -> InitialState end),
 	ok = meck:expect(fake_server, disconnect, fun(_, {error, breaked}) -> ok end).
 
 execute(ListenerPid) ->
+	State = fake_server:init(#connection_state{module=fake_server}, []),
     receive
         {ack, ListenerPid} ->
-            control_loop(ListenerPid,
-                         {gen_tcp, socket},
-                         #connection_state{module=fake_server,ip_address={127,0,0,1}}),
+            control_loop(ListenerPid, {gen_tcp, socket}, State#connection_state{ip_address={127,0,0,1}}),
             meck:validate(fake_server),
             meck:validate(gen_tcp)
     end,
@@ -1203,7 +1219,8 @@ nlst_test(Mode) ->
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			          ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
                       login_test_user_with_data_socket(ControlPid,
                                                        [{"NLST", "150 File status okay; about to open data connection.\r\n"},
                                                        {resp, data_socket, "edward\r\n"},
@@ -1244,11 +1261,10 @@ list_test(Mode) ->
                                 {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"},
                                 {resp, socket, "226 Closing data connection.\r\n"}],
 
-                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+					  ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
 
-                      login_test_user_with_data_socket(ControlPid,
-                                                       Script,
-                                                       Mode),
+                      login_test_user_with_data_socket(ControlPid,Script,Mode),
                       step(ControlPid),
                       finish(ControlPid)
               end),
@@ -1269,7 +1285,7 @@ remove_directory_test() ->
                                               {"RMD /bison/burgers", "550 Requested action not taken.\r\n"}]),
                      step(ControlPid),
 
-                     meck:expect(fake_server,
+                     ok = meck:expect(fake_server,
                                  remove_directory,
                                  fun(_, "/bison/burgers") ->
                                          {error, error}
@@ -1310,6 +1326,9 @@ remove_file_test() ->
 stor_test(Mode) ->
     setup(),
     ControlPid = self(),
+
+	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
+						InitialState#connection_state{recv_block_size=1024*1024} end),
     Child = spawn_link(
              fun() ->
                      Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
@@ -1326,7 +1345,12 @@ stor_test(Mode) ->
                                          {ok, S}
                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                     ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+					 ok = meck:expect(inet, setopts,
+					 				fun(data_socket, Opts) ->
+									 	?assertEqual(1024*1024, proplists:get_value(recbuf, Opts)),
+									 	ok
+									end),
 
                      login_test_user_with_data_socket(ControlPid, Script, Mode),
                      step(ControlPid),
@@ -1351,7 +1375,8 @@ stor_failure_test(Mode) ->
                                          {error, access_denied}
                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                     ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+					 ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
 
                      login_test_user_with_data_socket(ControlPid, Script, Mode),
                      step(ControlPid),
@@ -1384,7 +1409,9 @@ retr_test(Mode) ->
                                           end}
                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                     ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+					 ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+
                      login_test_user_with_data_socket(ControlPid, Script, Mode),
                      step(ControlPid),
                      finish(ControlPid)
@@ -1594,7 +1621,7 @@ utf8_success_test(Mode) ->
                        {resp, socket, "226 Closing data connection.\r\n"},
                        {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}],
 
-               meck:expect(fake_server,current_directory, fun(_) -> FileName end),
+               ok = meck:expect(fake_server,current_directory, fun(_) -> FileName end),
 
                login_test_user_with_data_socket(ControlPid, Script, Mode),
                step(ControlPid),
@@ -1615,11 +1642,12 @@ utf8_success_test(Mode) ->
                                    {ok, S}
                                end),
 
-               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+               ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			   ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
 
                step(ControlPid),
 
-                meck:expect(fake_server, put_file,
+               meck:expect(fake_server, put_file,
                                 fun(S, InFileName, done, notification) ->
                                    ?assertEqual(InFileName, FileName),
                                    {ok, S}
@@ -1631,7 +1659,8 @@ utf8_success_test(Mode) ->
                                                mtime={{3019,12,12},{12,12,12}},size=0}]
                                end),
 
-               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+               ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			   ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
 
                step(ControlPid),
                finish(ControlPid)
