@@ -18,7 +18,8 @@
           control_socket = undefined,
           ssl_socket = undefined,
           utf8 = true,
-		  recv_block_size = 64*1024
+		  recv_block_size = 64*1024,
+		  send_block_size = 64*1024
          }).
 
 -record(file_info,

@@ -31,6 +31,7 @@ init([HookModule, Opts]) ->
 
     UTF8 = proplists:get_value(utf8, Opts, DefState#connection_state.utf8),
 	RecvBlockSize = proplists:get_value(recv_block_size, Opts, DefState#connection_state.recv_block_size),
+	SendBlockSize = proplists:get_value(recv_block_size, Opts, DefState#connection_state.send_block_size),
 
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
@@ -42,7 +43,8 @@ init([HookModule, Opts]) ->
                                              ssl_cert=SslCert,
                                              ssl_ca_cert=CaSslCert,
                                              utf8=UTF8,
-											 recv_block_size=RecvBlockSize},
+											 recv_block_size=RecvBlockSize,
+											 send_block_size=SendBlockSize},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -534,7 +536,7 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
 			{ok, Fun} ->
                   DataSocket = data_connection(Socket, State),
 
-				  case ftp_result(State, write_fun(DataSocket, Fun)) of
+				  case ftp_result(State, write_fun(State#connection_state.send_block_size, DataSocket, Fun)) of
                   {ok, NewState} ->
                   	bf_close(DataSocket),
                   	respond(Socket, 226),
@@ -631,11 +633,11 @@ ftp_command(_, Socket, State, Command, _Arg) ->
     respond(Socket, 500),
     {ok, State}.
 
-write_fun(Socket, Fun) ->
-    case Fun(1024) of
+write_fun(SendBlockSize,Socket, Fun) ->
+    case Fun(SendBlockSize) of
         {ok, Bytes, NextFun} ->
             bf_send(Socket, Bytes),
-            write_fun(Socket, NextFun);
+            write_fun(SendBlockSize,Socket, NextFun);
         {done, NewState} ->
             {ok, NewState};
 		Another -> % errors and etc
@@ -1398,6 +1400,8 @@ stor_failure_test(Mode) ->
 ?dataSocketTest(retr_test).
 retr_test(Mode) ->
     setup(),
+	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
+						InitialState#connection_state{send_block_size=1024*1024} end),
     ControlPid = self(),
     Child = spawn_link(
              fun() ->
@@ -1409,13 +1413,13 @@ retr_test(Mode) ->
                                  get_file,
                                  fun(State, "bologna.txt") ->
                                          {ok,
-                                          fun(1024) ->
+                                          fun(1024*1024) ->
                                                   {ok,
                                                    list_to_binary("SOME DATA HERE"),
-                                                   fun(1024) ->
+                                                   fun(1024*1024) ->
                                                            {ok,
                                                             list_to_binary("SOME MORE DATA"),
-                                                            fun(1024) -> {done, State} end}
+                                                            fun(1024*1024) -> {done, State} end}
                                                    end}
                                           end}
                                  end),
@@ -1432,6 +1436,8 @@ retr_test(Mode) ->
 ?dataSocketTest(retr_failure_test).
 retr_failure_test(Mode) ->
     setup(),
+	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
+						InitialState#connection_state{send_block_size=1024} end),
     ControlPid = self(),
     Child = spawn_link(
              fun() ->
