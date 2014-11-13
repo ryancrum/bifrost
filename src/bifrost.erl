@@ -533,10 +533,19 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
         case ftp_result(State, Mod:get_file(State, Arg)) of
 			{ok, Fun} ->
                   DataSocket = data_connection(Socket, State),
-                  {ok, NewState} = write_fun(DataSocket, Fun),
-                  respond(Socket, 226),
-                  bf_close(DataSocket),
-                  {ok, NewState};
+
+				  case ftp_result(State, write_fun(DataSocket, Fun)) of
+                  {ok, NewState} ->
+                  	bf_close(DataSocket),
+                  	respond(Socket, 226),
+					{ok, NewState};
+
+				  {error, Reason, NewState} ->
+                  	bf_close(DataSocket),
+					respond(Socket, 451, format_error("Unable to get file", Reason)),
+                    {ok, NewState}
+				  end;
+
 			{error, Reason, NewState} ->
 				  respond(Socket, 550, format_error("Unable to get file", Reason)),
                   {ok, NewState}
@@ -628,7 +637,9 @@ write_fun(Socket, Fun) ->
             bf_send(Socket, Bytes),
             write_fun(Socket, NextFun);
         {done, NewState} ->
-            {ok, NewState}
+            {ok, NewState};
+		Another -> % errors and etc
+			Another
     end.
 
 strip_newlines(S) ->
@@ -1405,6 +1416,37 @@ retr_test(Mode) ->
                                                            {ok,
                                                             list_to_binary("SOME MORE DATA"),
                                                             fun(1024) -> {done, State} end}
+                                                   end}
+                                          end}
+                                 end),
+
+                     ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+					 ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+
+                     login_test_user_with_data_socket(ControlPid, Script, Mode),
+                     step(ControlPid),
+                     finish(ControlPid)
+             end),
+    execute(Child).
+
+?dataSocketTest(retr_failure_test).
+retr_failure_test(Mode) ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+             fun() ->
+                     Script = [{"RETR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                               {resp, data_socket, "SOME DATA HERE"},
+                               {resp, socket, "451 Unable to get file (\"Disk error\").\r\n"}],
+                     meck:expect(fake_server,
+                                 get_file,
+                                 fun(State, "bologna.txt") ->
+                                         {ok,
+                                          fun(1024) ->
+                                                  {ok,
+                                                   list_to_binary("SOME DATA HERE"),
+                                                   fun(1024) ->
+												   			{error, "Disk error", State}
                                                    end}
                                           end}
                                  end),
