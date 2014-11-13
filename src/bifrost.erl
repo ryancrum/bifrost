@@ -447,7 +447,7 @@ ftp_command(_, Socket, State, syst, _) ->
 ftp_command(Mod, Socket, State, dele, Arg) ->
     case ftp_result(State, Mod:remove_file(State, Arg)) of
         {ok, NewState} ->
-            respond(Socket, 200),
+            respond(Socket, 250), % see RFC 959
             {ok, NewState};
         {error, Reason, NewState} ->
             respond(Socket, 450, format_error("Unable to delete file", Reason)),
@@ -1307,7 +1307,7 @@ remove_file_test() ->
                                          {ok, St}
                                  end),
 
-                     login_test_user(ControlPid, [{"DELE cheese.txt", "200 Command okay.\r\n"},
+                     login_test_user(ControlPid, [{"DELE cheese.txt", "250 Requested file action okay, completed.\r\n"},
                                               {"DELE cheese.txt", "450 Unable to delete file.\r\n"}]),
                      step(ControlPid),
 
