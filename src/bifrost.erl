@@ -837,6 +837,7 @@ to_utf8(String, false) ->
 %===============================================================================
 % Testing Utility Functions
 setup() ->
+    ok = meck:new(error_logger, [unstick, passthrough]),
     ok = meck:new(gen_tcp, [unstick]),
     ok = meck:new(inet, [unstick, passthrough]),
     ok = meck:new(fake_server, [non_strict]),
@@ -853,7 +854,8 @@ execute(ListenerPid) ->
     end,
 	meck:unload(fake_server),
 	meck:unload(inet),
-	meck:unload(gen_tcp).
+	meck:unload(gen_tcp),
+	meck:unload(error_logger).
 
 -define(dataSocketTest(TEST_NAME),
         TEST_NAME() ->
@@ -1572,7 +1574,7 @@ feat_test() ->
            end),
    execute(Child).
 
-%?dataSocketTest(utf8_success_test).
+?dataSocketTest(utf8_success_test).
 utf8_success_test(Mode) ->
    setup(),
    ControlPid = self(),
@@ -1582,16 +1584,15 @@ utf8_success_test(Mode) ->
                UtfFileName = to_utf8(FileName), %milk-eggs
                BinData = <<"SOME DATA HERE">>,
 
-               Script =[   {"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
-                           {"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
-                           {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
-                           {req, data_socket, BinData},
-                           {resp, socket, "226 Closing data connection.\r\n"},
-                           {"LIST", "150 File status okay; about to open data connection.\r\n"},
-                           {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
-                           {resp, socket, "226 Closing data connection.\r\n"},
-                           {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}
-                       ],
+               Script=[{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
+                       {"CWD " ++ UtfFileName, "250 Directory changed to \""++ UtfFileName ++"\".\r\n"},
+                       {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
+                       {req, data_socket, BinData},
+                       {resp, socket, "226 Closing data connection.\r\n"},
+                       {"LIST", "150 File status okay; about to open data connection.\r\n"},
+                       {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
+                       {resp, socket, "226 Closing data connection.\r\n"},
+                       {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}],
 
                meck:expect(fake_server,current_directory, fun(_) -> FileName end),
 
@@ -1637,25 +1638,25 @@ utf8_success_test(Mode) ->
            end),
    execute(Child).
 
-%?dataSocketTest(utf8_failure_test).
+?dataSocketTest(utf8_failure_test).
 utf8_failure_test(Mode) ->
-   setup(),
-   ControlPid = self(),
-   Child = spawn_link(
-           fun() ->
-               FileName = "Молоко-Яйки", %milk-eggs
-               UtfFileNameOk = to_utf8(FileName), %milk-eggs
-               { UtfFileName, _ } = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
+	setup(),
+	ControlPid = self(),
+	Child = spawn_link(
+		fun() ->
+			FileName = "Молоко-Яйки", %milk-eggs
+			UtfFileNameOk = to_utf8(FileName), %milk-eggs
+			{UtfFileNameErr, _} = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
 
-               Script =[   {"CWD " ++ UtfFileName, "501 Syntax error in parameters or arguments.\r\n"}],
+			Script =[{"CWD " ++ UtfFileNameErr, "501 Syntax error in parameters or arguments.\r\n"}],
 
-               meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-               meck:expect(error_logger, warning_report, fun({bifrost, incomplete_utf8, _}) -> ok end),
+			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			ok = meck:expect(error_logger, warning_report, fun({bifrost, incomplete_utf8, _}) -> ok end),
 
-               login_test_user_with_data_socket(ControlPid, Script, Mode),
-               step(ControlPid),
-               finish(ControlPid)
-           end),
-   execute(Child).
+			login_test_user_with_data_socket(ControlPid, Script, Mode),
+			step(ControlPid),
+			finish(ControlPid)
+		end),
+	execute(Child).
 
 -endif.
