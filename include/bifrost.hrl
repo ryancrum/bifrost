@@ -19,7 +19,9 @@
           ssl_socket = undefined,
           utf8 = true,
 		  recv_block_size = 64*1024,
-		  send_block_size = 64*1024
+		  send_block_size = 64*1024,
+		  prev_cmd_notify = undefined, % previous command notification data { command, Arguments } | undefined
+		  control_timeout = infinity % control connection timeout for prev-command notification = tcp_gen:timeout()
          }).
 
 -record(file_info,

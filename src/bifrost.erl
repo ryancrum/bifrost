@@ -33,6 +33,8 @@ init([HookModule, Opts]) ->
 	RecvBlockSize = proplists:get_value(recv_block_size, Opts, DefState#connection_state.recv_block_size),
 	SendBlockSize = proplists:get_value(recv_block_size, Opts, DefState#connection_state.send_block_size),
 
+	ControlTimeout = proplists:get_value(control_timeout, Opts, DefState#connection_state.control_timeout),
+
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
@@ -44,7 +46,8 @@ init([HookModule, Opts]) ->
                                              ssl_ca_cert=CaSslCert,
                                              utf8=UTF8,
 											 recv_block_size=RecvBlockSize,
-											 send_block_size=SendBlockSize},
+											 send_block_size=SendBlockSize,
+											 control_timeout=ControlTimeout},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -128,10 +131,11 @@ establish_control_connection(Socket, InitialState) ->
                  {gen_tcp, Socket},
                  InitialState#connection_state{control_socket=Socket, ip_address=IpAddress}).
 
-control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
-    case SocketMod:recv(RawSocket, 0) of
+control_loop(HookPid, {SocketMod, RawSocket} = Socket, State0) ->
+    case SocketMod:recv(RawSocket, 0, State0#connection_state.control_timeout) of
         {ok, Input} ->
             {Command, Arg} = parse_input(Input),
+			State = prev_cmd_notify(Socket, State0, done), % get a valid command => let's notify about prev
             case ftp_command(Socket, State, Command, Arg) of
                 {ok, NewState} ->
                     if is_pid(HookPid) ->
@@ -165,10 +169,14 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
                     SocketMod:close(RawSocket),
                     {ok, quit}
             end;
-        {error, _Reason} ->
-            disconnect(State, {error, _Reason}),
+		{error, timeout} ->
+			NewState = prev_cmd_notify(Socket, State0, timeout),
+			control_loop(HookPid, Socket, NewState);
+        {error, Reason} ->
+			State = prev_cmd_notify(Socket, State0, terminated),
+            disconnect(State, {error, Reason}),
             error_logger:warning_report({bifrost, connection_terminated}),
-            { error, _Reason }
+            {error, Reason}
     end.
 
 respond(Socket, ResponseCode) ->
@@ -256,6 +264,35 @@ pasv_connection(ControlSocket, State) ->
             end
     end.
 
+%% put_file (stor) need a notification - when next command arrived there is a grarantee
+%% that previouse 'stor' command was executed successfully
+%% so this function notify about previous command
+prev_cmd_notify(_Socket, State, Notif) ->
+	case State#connection_state.prev_cmd_notify of
+		undefined ->
+			State;
+		{stor, FileName} ->
+			Mod = State#connection_state.module,
+			State1 = case ftp_result(State, Mod:put_file(State, FileName, Notif, notification)) of
+			{ok, NewState} ->
+				NewState;
+			{error, Reason, NewState} ->
+				error_logger:warning_report({bifrost, notify_error, Reason}),
+				NewState
+			end,
+			State1#connection_state{prev_cmd_notify=undefined};
+		{Command, _Arg} when is_atom(Command) ->
+			%skip valid notification for another command
+			State#connection_state{prev_cmd_notify=undefined};
+
+		Notify ->
+			%skip notify
+			error_logger:warning_report({bifrost, unsupported_nofity, Notify}),
+			State#connection_state{prev_cmd_notify=undefined}
+	end.
+
+
+
 disconnect(State, Type) ->
     Mod = State#connection_state.module,
     Mod:disconnect(State, Type).
@@ -300,7 +337,8 @@ ftp_command(Socket, State, Command, RawArg) ->
 			respond(Socket, 501),
 			{ok, State};
 		Arg ->
-	    	ftp_command(Mod, Socket, State, Command, Arg)
+			State1 = State#connection_state{prev_cmd_notify={Command, Arg}},
+	    	ftp_command(Mod, Socket, State1, Command, Arg)
 	end.
 
 ftp_command(_Mod, Socket, _State, quit, _) ->
@@ -469,10 +507,10 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
     RetState = case ftp_result(State, Mod:put_file(State, Arg, write, Fun)) of
                    {ok, NewState} ->
                        respond(Socket, 226),
-                       NewState;
+					   NewState;
 					{error, Reason, NewState} ->
                        respond(Socket, 451, format("Error ~p when storing a file.", [Reason])),
-                       NewState
+                       NewState#connection_state{prev_cmd_notify=undefined}
                end,
     bf_close(DataSocket),
     {ok, RetState};
@@ -677,7 +715,7 @@ bf_close({SockMod, Socket}) ->
     SockMod:close(Socket).
 
 bf_recv({SockMod, Socket}) ->
-    SockMod:recv(Socket, 0).
+    SockMod:recv(Socket, 0, infinity).
 
 % Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
@@ -866,6 +904,7 @@ to_utf8(String, false) ->
 %===============================================================================
 % Testing Utility Functions
 setup() ->
+	error_logger:tty(false),
     ok = meck:new(error_logger, [unstick, passthrough]),
     ok = meck:new(gen_tcp, [unstick]),
     ok = meck:new(inet, [unstick, passthrough]),
@@ -884,7 +923,8 @@ execute(ListenerPid) ->
 	meck:unload(fake_server),
 	meck:unload(inet),
 	meck:unload(gen_tcp),
-	meck:unload(error_logger).
+	meck:unload(error_logger),
+	error_logger:tty(true).
 
 -define(dataSocketTest(TEST_NAME),
         TEST_NAME() ->
@@ -895,34 +935,51 @@ execute(ListenerPid) ->
 script_dialog([]) ->
     meck:expect(gen_tcp,
                 recv,
-                fun(_, _) -> {error, closed} end);
+                fun(_, _, infinity) -> {error, closed} end);
 script_dialog([{Request, Response} | Rest]) ->
     meck:expect(gen_tcp,
                 recv,
-                fun(Socket, _) ->
+                fun(Socket, _, infinity) ->
                         script_dialog([{resp, Socket, Response}] ++ Rest),
                         {ok, Request}
                 end);
 script_dialog([{resp, Socket, Response} | Rest]) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S, C) ->
-                        ?assertEqual(Socket, S),
-                        ?assertEqual(Response, unicode:characters_to_list(C)),
-                        script_dialog(Rest)
-                end);
+    meck:expect(gen_tcp, send,
+					fun(S, C) ->
+						?assertEqual(Socket, S),
+						?assertEqual(Response, unicode:characters_to_list(C)),
+					script_dialog(Rest),
+					ok
+				end);
 script_dialog([{resp_bin, Socket, Response} | Rest]) ->
     meck:expect(gen_tcp,
                 send,
                 fun(S, C) ->
                         ?assertEqual(Socket, S),
                         ?assertEqual(Response, C),
-                        script_dialog(Rest)
+                        script_dialog(Rest),
+						ok
+                end);
+script_dialog([{resp_error, Socket, Error} | Rest]) ->
+    meck:expect(gen_tcp,
+                send,
+                fun(S, _C) ->
+                        ?assertEqual(Socket, S),
+                        script_dialog(Rest),
+						{error, Error}
+                end);
+script_dialog([{req_error, Socket, Error} | Rest]) ->
+    meck:expect(gen_tcp,
+                recv,
+                fun(S, _, infinity) ->
+                        ?assertEqual(S, Socket),
+                        script_dialog(Rest),
+                        {error, Error}
                 end);
 script_dialog([{req, Socket, Request} | Rest]) ->
     meck:expect(gen_tcp,
                 recv,
-                fun(S, _) ->
+                fun(S, _, infinity) ->
                         ?assertEqual(S, Socket),
                         script_dialog(Rest),
                         {ok, Request}
@@ -1344,13 +1401,14 @@ stor_test(Mode) ->
 						InitialState#connection_state{recv_block_size=1024*1024} end),
     Child = spawn_link(
              fun() ->
-                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                     Script = [{"STOR file.txt", "150 File status okay; about to open data connection.\r\n"},
                                {req, data_socket, <<"SOME DATA HERE">>},
-                               {resp, socket, "226 Closing data connection.\r\n"}
-                              ],
+                               {resp, socket, "226 Closing data connection.\r\n"},
+							   {"PWD", "257 \"/\"\r\n"}
+							   ],
                      meck:expect(fake_server,
                                  put_file,
-                                 fun(S, "bologna.txt", write, F) ->
+                                 fun(S, "file.txt", write, F) ->
                                          {ok, Data, DataSize} = F(),
                                          BinData = <<"SOME DATA HERE">>,
                                          ?assertEqual(Data, BinData),
@@ -1366,36 +1424,133 @@ stor_test(Mode) ->
 									end),
 
                      login_test_user_with_data_socket(ControlPid, Script, Mode),
-                     step(ControlPid),
+                     step(ControlPid), % STOR
+
+					 ok = meck:expect(fake_server,	put_file,
+					 		fun(S, "file.txt", done, notification) -> {ok, S} end),
+
+                     ok = meck:expect(fake_server,	current_directory,	fun(_) -> "/" end),
+                     step(ControlPid), % PWD
+
+
                      finish(ControlPid)
              end),
     execute(Child).
+
+?dataSocketTest(stor_user_failure_test).
+stor_user_failure_test(Mode) ->
+	setup(),
+	ControlPid = self(),
+	Child = spawn_link(
+		fun() ->
+			Script=[	{"STOR elif.txt", "150 File status okay; about to open data connection.\r\n"},
+						{req, data_socket, <<"SOME DATA HERE">>},
+						{resp, socket, "451 Error access_denied when storing a file.\r\n"},
+						{"QUIT", "200 Goodbye.\r\n"}],
+			ok = meck:expect(fake_server, put_file,
+					fun(_, "elif.txt", write, F) ->
+						F(),
+						{error, access_denied}
+					end),
+
+			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+			login_test_user_with_data_socket(ControlPid, Script, Mode),
+			step(ControlPid),
+
+			meck:expect(fake_server, disconnect, fun(_, exit) -> ok end),
+			meck:expect(gen_tcp, close, fun(socket) -> ok end),
+%			not needed, because USER kills itself
+%			meck:expect(fake_server,put_file, fun(S, "elif.txt", terminated, notification) -> {ok, S} end),
+			step(ControlPid),
+			finish(ControlPid)
+		end),
+	execute(Child).
+
+?dataSocketTest(stor_notificaion_test).
+stor_notificaion_test(Mode) ->
+	setup(),
+    ControlPid = self(),
+	Child = spawn_link(
+	fun() ->
+		Script=[	{"STOR ok.txt", "150 File status okay; about to open data connection.\r\n"},
+					{req, data_socket, <<"SOME DATA HERE">>},
+					{resp, socket, "226 Closing data connection.\r\n"},
+
+					{"STOR bad.txt", "150 File status okay; about to open data connection.\r\n"},
+					{req, data_socket, <<"SOME DATA HERE">>},
+					{resp, socket, "226 Closing data connection.\r\n"},
+					{req_error, socket, {error, closed}}
+				],
+
+			ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			ok = meck:expect(fake_server, put_file, fun(S, "ok.txt", write, F) ->
+										{ok, Data, DataSize} = F(),
+										BinData = <<"SOME DATA HERE">>,
+										?assertEqual(Data, BinData),
+										?assertEqual(DataSize, size(BinData)),
+										{ok, S}
+									end),
+
+			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			login_test_user_with_data_socket(ControlPid, Script, Mode),
+			step(ControlPid), % STOR(OK)
+
+			ok = meck:expect(fake_server, put_file,
+								fun	(S, "bad.txt", write, F) ->
+										{ok, Data, DataSize} = F(),
+											BinData = <<"SOME DATA HERE">>,
+											?assertEqual(Data, BinData),
+											?assertEqual(DataSize, size(BinData)),
+										{ok, S};
+									(S, "ok.txt", done, notification) ->
+										{ok, S}
+								end),
+			step(ControlPid), % STOR(BAD)
+
+
+			ok = meck:expect(fake_server, put_file,
+								fun	(S, "bad.txt", Result, notification) ->
+										?assertEqual(terminated, Result),
+										{ok, S}
+								end),
+			ok = meck:expect(fake_server, disconnect, fun(_, {error, {error, closed}}) -> ok end),
+			step(ControlPid), % CRASH CONNECTION
+			finish(ControlPid)
+		end),
+	execute(Child).
+
 
 ?dataSocketTest(stor_failure_test).
 stor_failure_test(Mode) ->
-    setup(),
-    ControlPid = self(),
-    Child = spawn_link(
-             fun() ->
-                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
-                               {req, data_socket, <<"SOME DATA HERE">>},
-                               {resp, socket, "451 Error access_denied when storing a file.\r\n"}
-                              ],
-                     meck:expect(fake_server,
-                                 put_file,
-                                 fun(_, "bologna.txt", write, F) ->
-                                         F(),
-                                         {error, access_denied}
-                                 end),
+	setup(),
+	ControlPid = self(),
+	Child = spawn_link(
+		fun() ->
+			Script=[	{"STOR elif.txt", "150 File status okay; about to open data connection.\r\n"},
+						{req, data_socket, <<"SOME DATA HERE">>},
+						{resp, socket, "451 Error access_denied when storing a file.\r\n"},
+						{"QUIT", "200 Goodbye.\r\n"}],
+			ok = meck:expect(fake_server, put_file,
+					fun(_, "elif.txt", write, F) ->
+						F(),
+						{error, access_denied}
+					end),
 
-                     ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-					 ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+			ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+			login_test_user_with_data_socket(ControlPid, Script, Mode),
+			step(ControlPid),
 
-                     login_test_user_with_data_socket(ControlPid, Script, Mode),
-                     step(ControlPid),
-                     finish(ControlPid)
-             end),
-    execute(Child).
+			meck:expect(fake_server, disconnect, fun(_, exit) -> ok end),
+			meck:expect(gen_tcp, close, fun(socket) -> ok end),
+%			meck:expect(fake_server,put_file, fun(S, "elif.txt", terminated, notification) -> {ok, S} end),
+%			not needed, because USER kills itself
+			step(ControlPid),
+			finish(ControlPid)
+		end),
+	execute(Child).
 
 ?dataSocketTest(retr_test).
 retr_test(Mode) ->

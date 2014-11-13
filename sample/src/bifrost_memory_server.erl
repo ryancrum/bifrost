@@ -166,6 +166,12 @@ list_files(State, Directory) ->
 % mode could be append or write, but we're only supporting
 % write.
 % FileRetrievalFun is fun() and returns {ok, Bytes, Count} or done
+
+% Upload notification is arriving during it with FileRetrievalFun == notification
+% and _Status done or terminated
+put_file(State, ProvidedFileName, _Status, notification) ->
+	{ok, State};
+
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
     Target = absolute_path(State, FileName),
