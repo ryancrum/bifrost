@@ -323,6 +323,10 @@ ftp_result(_State, {error, #connection_state{}=NewState, Reason}) ->
 ftp_result(_State, Data) ->
 	Data.
 
+-spec ftp_result(#connection_state{}, term(), fun()) -> term().
+ftp_result(State, Data, UserFunction) ->
+	ftp_result(State, UserFunction(State, Data)).
+
 %% FTP COMMANDS
 
 ftp_command(Socket, State, Command, RawArg) ->
@@ -570,11 +574,13 @@ ftp_command(Mod, Socket, State, help, Arg) ->
 
 ftp_command(Mod, Socket, State, retr, Arg) ->
     try
-        case ftp_result(State, Mod:get_file(State, Arg)) of
-			{ok, Fun} ->
-                  DataSocket = data_connection(Socket, State),
+        case ftp_result(State, Mod:get_file(State, Arg),
+					fun	(S, {ok, Fun}) when is_function(Fun)-> {ok, Fun, S};
+						(_S, Any) -> Any	end) of
 
-				  case ftp_result(State, write_fun(State#connection_state.send_block_size, DataSocket, Fun)) of
+			{ok, Fun, State0} ->
+                  DataSocket = data_connection(Socket, State0),
+				  case ftp_result(State0, write_fun(State0#connection_state.send_block_size, DataSocket, Fun)) of
                   {ok, NewState} ->
                   	bf_close(DataSocket),
                   	respond(Socket, 226),
@@ -1051,6 +1057,22 @@ ftp_result_test() ->
 	Fun = fun(_BytesCount) -> ok end,
 	?assertEqual({error, undef, State}, ftp_result(State, error)), %get_file
 	?assertMatch({ok, Fun}, ftp_result(State, {ok, Fun})), %get_file
+
+	?assertMatch({ok, Fun, State}, ftp_result(State, {ok, Fun},
+											fun (S, {ok, Fn}) when is_function(Fn)-> {ok, Fn, S};
+								                        (_S, Any) -> Any    end)),
+
+	?assertMatch({ok, Fun, NewState}, ftp_result(State, {ok, Fun, NewState},
+											fun (S, {ok, Fn}) when is_function(Fn)-> {ok, Fn, S};
+								                        (_S, Any) -> Any    end)),
+
+	?assertMatch({ok, NewState}, ftp_result(State, {ok, NewState},
+											fun (S, {ok, Fn}) when is_function(Fn)-> {ok, Fn, S};
+								                        (_S, Any) -> Any    end)),
+
+	?assertMatch({error, undef, NewState}, ftp_result(State, {error, NewState},
+											fun (S, {ok, Fn}) when is_function(Fn)-> {ok, Fn, S};
+								                        (_S, Any) -> Any    end)),
 
 	?assertMatch({ok, file_info}, ftp_result(State, {ok, file_info})),	%file_info
 	?assertMatch({error, "ErrorCause", State}, ftp_result(State, {error, "ErrorCause"})),	%file_info
