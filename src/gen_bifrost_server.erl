@@ -8,24 +8,43 @@
 -export([behaviour_info/1]).
 
 behaviour_info(callbacks) ->
-    % Path :: String
-    % State Change :: {ok, NewState} OR {error, NewState} OR {error, Reason} OR {error, Reason, NewState}
+	% FileInfo :: include/bifrost.hrl:file_info()
+	% State, NewState :: include/bifrost.hrl:connection_state()
+    % Path      :: String
     % File Name :: String
+	%
+    % StateChangeOK     :: {ok, NewState}
+    % StateChangeError  :: {error, Reason, NewState}
+	% 						for compatibility {error, Reason} and {error, NewState} also supported
+	%
+	% StateChange :: StateChangeOK | StateChangeError
+	%
     % HelpInfo :: {Name, Description}
+	%
+	% GetFun(ByteCount) -> {ok, Bytes, NextGetFun} | {done, NewState} | StateChangeError
+	%
     [{init, 2}, % State, PropList (options) -> State
-     {login, 3}, % State, Username, Password -> {true OR false, State}
+     {login, 3}, % State, Username, Password -> {true OR false, State} | 'quit'(disconnect client)
      {current_directory, 1}, % State -> Path
-     {make_directory, 2}, % State, Path -> State Change
-     {change_directory, 2}, % State, Path -> State Change
-     {list_files, 2}, % State, Path -> [FileInfo] OR {error, State}
-     {remove_directory, 2}, % State, Path -> State Change
-     {remove_file, 2}, % State, Path -> State Change
-     {put_file, 4}, % State, File Name, (append OR write), Fun(Byte Count) -> State Change
-     {get_file, 2}, % State, Path -> {ok, Fun(Byte Count)} OR error
-     {file_info, 2}, % State, Path -> {ok, FileInfo} OR {error, ErrorCause}
-     {rename_file, 3}, % State, From Path, To Path -> State Change
-     {site_command, 3}, % State, Command Name String, Command Args String -> State Change
-     {site_help, 1}, % State -> {ok, [HelpInfo]} OR {error, State}
-     {disconnect, 2}]; % State, exit (QUIT command from client) or { error, Reason }  -> *unused* State Change
+     {make_directory, 2}, % State, Path -> StateChange
+     {change_directory, 2}, % State, Path -> StateChange
+     {list_files, 2}, % State, Path -> [FileInfo] | StateChangeError
+
+     {remove_directory, 2}, % State, Path -> StateChange
+     {remove_file, 2}, % State, Path -> StateChange
+     {put_file, 4}, % State, File Name, (append | write), Fun(Byte Count) -> StateChange
+	 				% State, File Name, notification, 	done (next command is arrived) |
+					% 									timeout (control_timeout is passed, but connection works)|
+					% 									terminated (control connection error) -> StateChange
+     {get_file, 2}, % State, Path -> {ok, GetFun, NewState} | StateChangeError
+	 				%      for compatibility {ok, GetFun} | error also supported
+
+     {file_info, 2}, % State, Path -> {ok, FileInfo} | StateChangeError
+     {rename_file, 3}, % State, From Path, To Path -> StateChange
+     {site_command, 3}, % State, CommandNameString, CommandArgsString -> StateChange
+     {site_help, 1}, % State -> {ok, [HelpInfo]} | StateChangeError
+
+     {disconnect, 2}]; % State, exit (QUIT command from client) or {error, Reason}  -> *unused* State Change
+
 behaviour_info(_) ->
     undefined.

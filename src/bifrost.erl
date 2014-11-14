@@ -273,7 +273,7 @@ prev_cmd_notify(_Socket, State, Notif) ->
 			State;
 		{stor, FileName} ->
 			Mod = State#connection_state.module,
-			State1 = case ftp_result(State, Mod:put_file(State, FileName, Notif, notification)) of
+			State1 = case ftp_result(State, Mod:put_file(State, FileName, notification, Notif)) of
 			{ok, NewState} ->
 				NewState;
 			{error, Reason, NewState} ->
@@ -291,12 +291,9 @@ prev_cmd_notify(_Socket, State, Notif) ->
 			State#connection_state{prev_cmd_notify=undefined}
 	end.
 
-
-
 disconnect(State, Type) ->
     Mod = State#connection_state.module,
     Mod:disconnect(State, Type).
-
 
 -spec ftp_result(#connection_state{}, term()) -> term().
 ftp_result(State, {error}) ->
@@ -406,7 +403,10 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
         {true, NewState} ->
             respond(Socket, 230),
             {ok, NewState#connection_state{authenticated_state=authenticated}};
-        _ ->
+        {false, NewState} ->
+            respond(Socket, 530, "Login incorrect."),
+            {ok, NewState#connection_state{user_name=none, authenticated_state=unauthenticated}};
+		_Quit ->
             respond(Socket, 530, "Login incorrect."),
             {error, auth}
      end;
@@ -623,10 +623,10 @@ ftp_command(Mod, Socket, State, rnto, Arg) ->
             respond(Socket, 503, "RNFR not specified."),
             {ok, State};
         Rnfr ->
-            case Mod:rename_file(State, Rnfr, Arg) of
-                {error, Reason} ->
+            case ftp_result(State, Mod:rename_file(State, Rnfr, Arg)) of
+                {error, Reason, NewState} ->
 				    respond(Socket, 550, io_lib:format("Unable to rename (~p).", [Reason])),
-                    {ok, State};
+                    {ok, NewState};
                 {ok, NewState} ->
                     respond(Socket, 250, "Rename successful."),
                     {ok, NewState#connection_state{rnfr=undefined}}
@@ -1449,7 +1449,7 @@ stor_test(Mode) ->
                      step(ControlPid), % STOR
 
 					 ok = meck:expect(fake_server,	put_file,
-					 		fun(S, "file.txt", done, notification) -> {ok, S} end),
+					 		fun(S, "file.txt", notification, done) -> {ok, S} end),
 
                      ok = meck:expect(fake_server,	current_directory,	fun(_) -> "/" end),
                      step(ControlPid), % PWD
@@ -1483,7 +1483,7 @@ stor_user_failure_test(Mode) ->
 			meck:expect(fake_server, disconnect, fun(_, exit) -> ok end),
 			meck:expect(gen_tcp, close, fun(socket) -> ok end),
 %			not needed, because USER kills itself
-%			meck:expect(fake_server,put_file, fun(S, "elif.txt", terminated, notification) -> {ok, S} end),
+%			meck:expect(fake_server,put_file, fun(S, "elif.txt", notification, terminated) -> {ok, S} end),
 			step(ControlPid),
 			finish(ControlPid)
 		end),
@@ -1526,14 +1526,14 @@ stor_notificaion_test(Mode) ->
 											?assertEqual(Data, BinData),
 											?assertEqual(DataSize, size(BinData)),
 										{ok, S};
-									(S, "ok.txt", done, notification) ->
+									(S, "ok.txt", notification, done) ->
 										{ok, S}
 								end),
 			step(ControlPid), % STOR(BAD)
 
 
 			ok = meck:expect(fake_server, put_file,
-								fun	(S, "bad.txt", Result, notification) ->
+								fun	(S, "bad.txt", notification, Result) ->
 										?assertEqual(terminated, Result),
 										{ok, S}
 								end),
@@ -1567,7 +1567,7 @@ stor_failure_test(Mode) ->
 
 			meck:expect(fake_server, disconnect, fun(_, exit) -> ok end),
 			meck:expect(gen_tcp, close, fun(socket) -> ok end),
-%			meck:expect(fake_server,put_file, fun(S, "elif.txt", terminated, notification) -> {ok, S} end),
+%			meck:expect(fake_server,put_file, fun(S, "elif.txt", notification, terminated) -> {ok, S} end),
 %			not needed, because USER kills itself
 			step(ControlPid),
 			finish(ControlPid)
@@ -1873,7 +1873,7 @@ utf8_success_test(Mode) ->
                step(ControlPid),
 
                meck:expect(fake_server, put_file,
-                                fun(S, InFileName, done, notification) ->
+                                fun(S, InFileName, notification, done) ->
                                    ?assertEqual(InFileName, FileName),
                                    {ok, S}
                                end),

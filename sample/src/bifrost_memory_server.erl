@@ -92,7 +92,7 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
-disconnect(_, Reason) ->
+disconnect(_, _Reason) ->
     ok.
 
 % Delete a file
@@ -169,7 +169,7 @@ list_files(State, Directory) ->
 
 % Upload notification is arriving during it with FileRetrievalFun == notification
 % and _Status done or terminated
-put_file(State, ProvidedFileName, _Status, notification) ->
+put_file(State, _ProvidedFileName, notification, _Status) ->
 	{ok, State};
 
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
