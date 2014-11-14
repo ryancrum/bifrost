@@ -2,21 +2,36 @@
 %global upstream madrat-
 %global debug_package %{nil}
 
-%global commit		e0518257d4eada8ee25e730fb15b448e646cab92
-%global commit_time 20141113
-%global git_tag %(c=%{commit}; echo ${c:0:8})
+%global git_url http://github.com/%{upstream}/%{realname}
+
+%if 0%{!?git_tag:1}
+%global git_tag HEAD
+%endif
+
+%global git_log %(GITDIR=`mktemp -d` && git clone -q %{git_url} $GITDIR && pushd $GITDIR >/dev/null && git reset -q --hard %{git_tag} && LOG=$(git log -n 1 --format='%h %H %ct') && popd >/dev/null && rm -Rf $GITDIR >/dev/null && echo $LOG)
+
+%if "%{git_log}" == ""
+	Can not get log info for %{git_tag}
+%endif
+
+%global git_tag 		%(echo "%{git_log}" | cut -d ' ' -f1)
+%global git_commit  	%(echo "%{git_log}" | cut -d ' ' -f2)
+%global git_commit_time %(echo "%{git_log}" | cut -d ' ' -f3 | date --utc -d - +'%Y%m%d')
+
+%{echo:Building commit %{git_commit}...
+}
+
 %global patchnumber 0
 
 %bcond_without check
 
 Name:		erlang-%{realname}
 Version:	0.0.0
-Release:	%{commit_time}.%{patchnumber}.%{git_tag}%{?dist}
+Release:	%{git_commit_time}.%{patchnumber}.%{git_tag}%{?dist}
 Summary:	Pluggable Erlang FTP Server
 Group:		Development/Libraries
 License:	MIT
-URL:		http://github.com/madrat-/bifrost
-#Source0:	%{upstream}-%{realname}-%{version}-%{git_tag}.tar.bz2
+URL:		%{git_url}
 
 BuildRequires:	erlang-rebar
 BuildRequires:	erlang-meck >= 0.8.1
@@ -41,9 +56,9 @@ Bifrost also includes FTP/SSL support, if you supply a certificate.
 This version is fork of https://github.com/thorstadt/bifrost
 
 %prep
-%setup -T -c -n %{upstream}-%{realname}-%{version}
-git clone --depth=1 %{url}  ../%{upstream}-%{realname}-%{version} 
-git reset --hard %{commit}
+%setup -n %{upstream}-%{realname}-%{version} -T -c
+git clone -q %{git_url} `pwd`
+git reset -q --hard %{git_tag}
 
 %build
 make
