@@ -189,6 +189,11 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
 respond_raw({SocketMod, Socket}, Line) ->
     SocketMod:send(Socket, to_utf8(Line) ++ "\r\n").
 
+respond_feature(Socket, Name, true) ->
+	respond_raw(Socket, " " ++ Name);
+respond_feature(_Socket, _Name, false) ->
+	ok.
+
 ssl_options(State) ->
     [{keyfile, State#connection_state.ssl_key},
      {certfile, State#connection_state.ssl_cert},
@@ -351,7 +356,7 @@ ftp_command(_, Socket, State, pasv, _) ->
 
 ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
     if State#connection_state.ssl_allowed =:= false ->
-            respond(Socket, 500),
+            respond(Socket, 504),
             {ok, State};
        true ->
             case string:to_lower(Arg) of
@@ -363,8 +368,8 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
                             {new_socket,
                              State#connection_state{ssl_socket=SslSocket},
                              {ssl, SslSocket}};
-                        _ ->
-                            respond(Socket, 500),
+                        {error, Reason} ->
+                            respond(Socket, 500, format_error(500, Reason)),
                             {ok, State}
                     end;
                 _ ->
@@ -650,12 +655,9 @@ ftp_command(Mod, Socket, State, xrmd, Arg) ->
 
 ftp_command(_Mod, Socket, State, feat, _Arg) ->
     respond_raw(Socket, "211-Features"),
-    case State#connection_state.utf8 of
-        true ->
-            respond_raw(Socket, " UTF8");
-        _ ->
-            ok
-    end,
+	respond_feature(Socket, "UTF8", State#connection_state.utf8),
+	respond_feature(Socket, "AUTH TLS", State#connection_state.ssl_allowed),
+	respond_feature(Socket, "PROT", State#connection_state.ssl_allowed),
     respond(Socket, 211, "End"),
     {ok, State};
 
