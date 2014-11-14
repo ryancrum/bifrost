@@ -19,11 +19,23 @@ start_link(HookModule, Opts) ->
 
 % gen_server callbacks implementation
 init([HookModule, Opts]) ->
+	try
 	DefState = #connection_state{module=HookModule},
 
     Port = proplists:get_value(port, Opts, 21),
 
-    Ssl = proplists:get_value(ssl, Opts, DefState#connection_state.ssl_allowed),
+    Ssl = case proplists:get_value(ssl, Opts, DefState#connection_state.ssl_allowed) of
+		false ->
+			false;
+		true ->
+			% is SSL module started?
+			case lists:any(fun({ssl,_,_})->true;(_A)->false end, application:which_applications()) of
+				true ->
+					true;
+				false ->
+					throw({stop, ssl_not_started})
+			end
+	end,
 
     SslKey = proplists:get_value(ssl_key, Opts),
     SslCert = proplists:get_value(ssl_cert, Opts),
@@ -57,7 +69,15 @@ init([HookModule, Opts]) ->
             {ok, {listen_socket, Listen}};
         {error, Error} ->
             {stop, Error}
-    end.
+    end
+	catch
+		_Type0:{stop, Reason} ->
+            error_logger:error_report({bifrost, init_error, Reason}),
+			{stop, Reason};
+		_Type1:Exception ->
+            error_logger:error_report({bifrost, init_exception, Exception}),
+			{stop, Exception}
+	end.
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -369,8 +389,10 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
                              State#connection_state{ssl_socket=SslSocket},
                              {ssl, SslSocket}};
                         {error, Reason} ->
-                            respond(Socket, 500, format_error(500, Reason)),
-                            {ok, State}
+							% Command itself is executed and 234 is sent
+							% but if issue at SSL level - just disconnect is a solution - so returns quit
+    						error_logger:error_report({bifrost, ssl_accept, Reason}),
+							quit
                     end;
                 _ ->
                     respond(Socket, 502, "Unsupported security extension."),
