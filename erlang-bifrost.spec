@@ -2,7 +2,7 @@
 %global upstream madrat-
 %global debug_package %{nil}
 
-%global git_url http://github.com/%{upstream}/%{realname}
+%global git_url https://github.com/%{upstream}/%{realname}
 
 %if 0%{!?git_tag:1}
 %global git_tag HEAD
@@ -34,7 +34,7 @@ License:	MIT
 URL:		%{git_url}
 
 BuildRequires:	erlang-rebar
-BuildRequires:	erlang-meck >= 0.8.1
+%{!?_without_check:BuildRequires:  erlang-meck >= 0.8.1}
 
 Requires:	erlang-compiler%{?_isa}
 Requires:	erlang-crypto%{?_isa}
@@ -44,7 +44,6 @@ Requires:	erlang-kernel%{?_isa}
 Requires:	erlang-ssl%{?_isa}
 Requires:	erlang-stdlib%{?_isa} >= R16
 Requires:	erlang-syntax_tools%{?_isa}
-Requires:	erlang-meck >= 0.8.1
 Provides:	%{realname} = %{version}-%{release}
 
 
@@ -59,6 +58,7 @@ This version is fork of https://github.com/thorstadt/bifrost
 %setup -n %{upstream}-%{realname}-%{version} -T -c
 git clone -q %{git_url} `pwd`
 git reset -q --hard %{git_tag}
+%{?_without_check:sed -rne '/meck/!p' -i.meck rebar.config}
 
 %build
 make
