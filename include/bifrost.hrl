@@ -9,7 +9,10 @@
           rnfr = undefined,
           module,
           module_state,
-          ssl_allowed = false,
+		  ssl_mode = disabled,	% 'disabled' - NO SSL
+								% 'enabled'  - allowed SSL and FTP
+								% 'only'     - non secured FTP is not allowed
+								% old true and false also supported
           ssl_cert = undefined,
           ssl_key = undefined,
           ssl_ca_cert = undefined,

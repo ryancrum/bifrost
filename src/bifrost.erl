@@ -24,14 +24,18 @@ init([HookModule, Opts]) ->
 
     Port = proplists:get_value(port, Opts, 21),
 
-    Ssl = case proplists:get_value(ssl, Opts, DefState#connection_state.ssl_allowed) of
+    SslMode = case proplists:get_value(ssl, Opts, DefState#connection_state.ssl_mode) of
+		disabled ->
+			disabled;
 		false ->
-			false;
-		true ->
+			disabled;	% legacy
+		Mode when	Mode==enabled;
+					Mode==only;
+					Mode==true ->
 			% is SSL module started?
 			case lists:any(fun({ssl,_,_})->true;(_A)->false end, application:which_applications()) of
 				true ->
-					true;
+					if true == Mode -> enabled; true -> Mode end;
 				false ->
 					throw({stop, ssl_not_started})
 			end
@@ -52,7 +56,7 @@ init([HookModule, Opts]) ->
             IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
             InitialState = DefState#connection_state{
                                              ip_address=IpAddress,
-                                             ssl_allowed=Ssl,
+                                             ssl_mode=SslMode,
                                              ssl_key=SslKey,
                                              ssl_cert=SslCert,
                                              ssl_ca_cert=CaSslCert,
@@ -371,34 +375,55 @@ ftp_command(_Mod, Socket, _State, quit, _) ->
     respond(Socket, 200, "Goodbye."),
     quit;
 
+ftp_command(_Mod, Socket, State=#connection_state{ssl_mode=disabled}, auth, _Arg) ->
+	respond(Socket, 504),
+	{ok, State};
+
+ftp_command(_Mod, {_, RawSocket} = Socket, State, auth, Arg) ->
+	case string:to_lower(Arg) of
+		"tls" ->
+			respond(Socket, 234, "Command okay."),
+			case ssl:ssl_accept(RawSocket, ssl_options(State)) of
+				{ok, SslSocket} ->
+					{new_socket,State#connection_state{ssl_socket=SslSocket},{ssl, SslSocket}};
+				{error, Reason} ->
+					% Command itself is executed and 234 is sent
+					% but if issue at SSL level - just disconnect is a solution - so returns quit
+					error_logger:error_report({bifrost, ssl_accept, Reason}),
+					quit
+			end;
+		_Method ->
+			respond(Socket, 502, "Unsupported security extension."),
+			{ok, State}
+    end;
+
+ftp_command(_Mod, Socket, State, feat, _Arg) ->
+	respond_raw(Socket, "211-Features"),
+	respond_feature(Socket, "UTF8", State#connection_state.utf8),
+	respond_feature(Socket, "AUTH TLS", State#connection_state.ssl_mode =/= disabled),
+	respond_feature(Socket, "PROT", State#connection_state.ssl_mode =/= disabled),
+	respond(Socket, 211, "End"),
+	{ok, State};
+
+ftp_command(_Mod, Socket, State, opts, Arg) ->
+	case string:to_upper(Arg) of
+		"UTF8 ON" when State#connection_state.utf8 =:= true ->
+			respond(Socket, 200, "Accepted");
+		_Option ->
+			respond(Socket, 501)
+	end,
+	{ok, State};
+
+
+% Allow only commands 'QUIT', 'AUTH', 'FEAT', 'OPTS'
+%  for ssl_mode == only
+ftp_command(_, Socket, State=#connection_state{ssl_socket=undefined, ssl_mode=only}, _, _) ->
+	respond(Socket, 534, "Request denied for policy reasons (only ftps allowed)."),
+	{ok, State};
+
 ftp_command(_, Socket, State, pasv, _) ->
     pasv_connection(Socket, State);
 
-ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
-    if State#connection_state.ssl_allowed =:= false ->
-            respond(Socket, 504),
-            {ok, State};
-       true ->
-            case string:to_lower(Arg) of
-                "tls" ->
-                    respond(Socket, 234, "Command okay."),
-                    case ssl:ssl_accept(RawSocket,
-                                        ssl_options(State)) of
-                        {ok, SslSocket} ->
-                            {new_socket,
-                             State#connection_state{ssl_socket=SslSocket},
-                             {ssl, SslSocket}};
-                        {error, Reason} ->
-							% Command itself is executed and 234 is sent
-							% but if issue at SSL level - just disconnect is a solution - so returns quit
-    						error_logger:error_report({bifrost, ssl_accept, Reason}),
-							quit
-                    end;
-                _ ->
-                    respond(Socket, 502, "Unsupported security extension."),
-                    {ok, State}
-            end
-    end;
 
 ftp_command(_, Socket, State, prot, Arg) ->
     ProtMode = case string:to_lower(Arg) of
@@ -674,23 +699,6 @@ ftp_command(Mod, Socket, State, xpwd, Arg) ->
 
 ftp_command(Mod, Socket, State, xrmd, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Arg);
-
-ftp_command(_Mod, Socket, State, feat, _Arg) ->
-    respond_raw(Socket, "211-Features"),
-	respond_feature(Socket, "UTF8", State#connection_state.utf8),
-	respond_feature(Socket, "AUTH TLS", State#connection_state.ssl_allowed),
-	respond_feature(Socket, "PROT", State#connection_state.ssl_allowed),
-    respond(Socket, 211, "End"),
-    {ok, State};
-
-ftp_command(_Mod, Socket, State, opts, Arg) ->
-    case string:to_upper(Arg) of
-        "UTF8 ON" when State#connection_state.utf8 =:= true ->
-            respond(Socket, 200, "Accepted");
-        _ ->
-            respond(Socket, 501)
-    end,
-    {ok, State};
 
 ftp_command(_Mod, Socket, State, size, _Arg) ->
     respond(Socket, 550),
@@ -1169,6 +1177,30 @@ unauthenticated_test() ->
 					finish(ControlPid)
 				end),
 	execute(Child).
+
+ssl_only_test() ->
+	setup(),
+	ControlPid = self(),
+	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
+                       InitialState#connection_state{ssl_mode=only, utf8=false} end),
+
+
+   Child = spawn_link(fun() ->
+                       script_dialog([ {"USER hamster", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
+                                       {"MKD /unicorns", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
+                                       {"CWD /hamster", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
+                                       {"PWD", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
+										{"FEAT", "211-Features\r\n"},
+                                          {resp, socket, " AUTH TLS\r\n" },
+                                          {resp, socket, " PROT\r\n" },
+                                          {resp, socket, "211 End\r\n" }
+                                           ]),
+                       step(ControlPid),
+                       step(ControlPid),
+                       step(ControlPid),
+                       finish(ControlPid)
+                   end),
+   execute(Child).
 
 mkdir_test() ->
     setup(),
