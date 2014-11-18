@@ -905,7 +905,13 @@ format_port(PortNumber) ->
 
 -spec format(string(), list()) -> string().
 format(FormatString, Args) ->
-	lists:flatten(io_lib:format(FormatString, Args)).
+	case catch io_lib:format(FormatString, Args) of
+		{'EXIT',{badarg,_}} ->
+            error_logger:error_report({bifrost, format_error, {FormatString, Args}}),
+			"Invalid format";
+		Data ->
+			lists:flatten(Data)
+	end.
 
 -spec format_error(integer() | string(), term()) -> string().
 format_error(Code, Reason) when is_integer(Code) ->
@@ -915,7 +921,13 @@ format_error(Message, undef) ->
 	Message ++ ".";
 
 format_error(Message, Reason) ->
-	format("~ts (~p).", [Message, Reason]).
+	Format = case io_lib:printable_unicode_list(Reason) of
+		true ->
+			"~ts (~ts)";
+		_False ->
+			"~ts (~p)"
+	end,
+	format(Format, [Message, Reason]) ++ ".".
 
 from_utf8(String, true) ->
 	unicode:characters_to_list(erlang:list_to_binary(String), utf8);
@@ -1676,7 +1688,7 @@ retr_failure_test(Mode) ->
              fun() ->
                      Script = [{"RETR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
                                {resp, data_socket, "SOME DATA HERE"},
-                               {resp, socket, "451 Unable to get file (\"Disk error\").\r\n"}],
+                               {resp, socket, "451 Unable to get file (Disk error).\r\n"}],
                      meck:expect(fake_server,
                                  get_file,
                                  fun(State, "bologna.txt") ->
