@@ -140,7 +140,7 @@ get_socket_port(Socket) ->
 %-------------------------------------------------------------------------------
 listen_socket({Start, End}, _TcpOpts, _NextPort) when End < Start ->
 	error_logger:warning_report({bifrost, listen_socket, "no free socket in range"}),
-	{error, eaddrinuse};
+	{error, emfile};
 
 listen_socket({Start, End}, TcpOpts, random) ->
 	% if the for [Start, End] Start<End => Start-1 < End and we have additional item for test
