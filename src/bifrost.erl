@@ -1,9 +1,8 @@
-%%%-------------------------------------------------------------------
+%%%=============================================================================
 %%% File    : bifrost.erl
 %%% Author  : Ryan Crum <ryan@ryancrum.org>
 %%% Description : Pluggable FTP Server gen_server
-%%%-------------------------------------------------------------------
-
+%%%=============================================================================
 -module(bifrost).
 
 -behaviour(gen_server).
@@ -14,9 +13,13 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-define(MAX_TCPIP_PORT, 65535).
+
+%-------------------------------------------------------------------------------
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
+%-------------------------------------------------------------------------------
 % gen_server callbacks implementation
 init([HookModule, Opts]) ->
 	try
@@ -51,6 +54,23 @@ init([HookModule, Opts]) ->
 
 	ControlTimeout = proplists:get_value(control_timeout, Opts, DefState#connection_state.control_timeout),
 
+	PortRange = case proplists:get_value(port_range, Opts, DefState#connection_state.port_range) of
+		0 						-> 0;
+		1 						-> 0;
+		{0, ?MAX_TCPIP_PORT}	-> 0;
+		{1, ?MAX_TCPIP_PORT}	-> 0;
+
+		N when is_integer(N), N>=0, ?MAX_TCPIP_PORT>=N ->
+			{N, ?MAX_TCPIP_PORT};
+
+		{N,M} when 	is_integer(N), N>=0, ?MAX_TCPIP_PORT>=N andalso
+					is_integer(M), M>=0, ?MAX_TCPIP_PORT>=M, M>=N  ->
+			{N, M};
+
+		_AnotherValue ->
+			throw({stop, lists:flatten(io_lib:format("Invalid port_range ~p", [_AnotherValue]))})
+	end,
+
     case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
         {ok, Listen} ->
             IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
@@ -63,7 +83,8 @@ init([HookModule, Opts]) ->
                                              utf8=UTF8,
 											 recv_block_size=RecvBlockSize,
 											 send_block_size=SendBlockSize,
-											 control_timeout=ControlTimeout},
+											 control_timeout=ControlTimeout,
+											 port_range=PortRange},
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
                                              [HookModule:init(InitialState, Opts)]),
@@ -83,33 +104,72 @@ init([HookModule, Opts]) ->
 			{stop, Exception}
 	end.
 
+%-------------------------------------------------------------------------------
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+%-------------------------------------------------------------------------------
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%-------------------------------------------------------------------------------
 handle_info(_Info, State) ->
     {noreply, State}.
 
+%-------------------------------------------------------------------------------
 terminate(_Reason, {listen_socket, Socket}) ->
     gen_tcp:close(Socket);
 terminate(_Reason, _State) ->
     ok.
 
+%-------------------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+%-------------------------------------------------------------------------------
 get_socket_addr(Socket) ->
-    case inet:sockname(Socket) of
-        {ok, {Addr, _}} ->
-            Addr
-    end.
+	{ok, {Addr, _Port}} = inet:sockname(Socket),
+	Addr.
 
-listen_socket(Port, TcpOpts) ->
+%-------------------------------------------------------------------------------
+get_socket_port(Socket) ->
+	{ok, {_Addr, Port}} = inet:sockname(Socket),
+	Port.
+
+%-------------------------------------------------------------------------------
+listen_socket({Start, End}, _TcpOpts, _NextPort) when End < Start ->
+	error_logger:warning_report({bifrost, listen_socket, "no free socket in range"}),
+	{error, eaddrinuse};
+
+listen_socket({Start, End}, TcpOpts, random) ->
+	% if the for [Start, End] Start<End => Start-1 < End and we have additional item for test
+	listen_socket({Start-1, End}, TcpOpts, random:uniform(End-Start+1)+Start-1);
+
+listen_socket({Start, End}, TcpOpts, TryPort) when is_integer(TryPort) ->
+	case listen_socket(TryPort, TcpOpts) of
+		{error, eaddrinuse} ->
+			listen_socket({Start+1, End}, TcpOpts, Start+1);
+		Another ->
+			Another
+	end.
+
+listen_socket({Start, End}, TcpOpts0) ->
+	% strategy - try a random port, after it - try from start to end
+	% the assumption a lot of  ports and just few connections
+	TcpOpts = case	proplists:get_value(reuseaddr, TcpOpts0, false) of
+		true ->
+			error_logger:warning_report({bifrost, listen_socket, "find free listen socket with reuseaddr"}),
+			proplists:delete(reuseaddr, TcpOpts0);
+		false ->
+			TcpOpts0
+	end,
+	listen_socket({Start, End}, TcpOpts, random);
+
+listen_socket(Port, TcpOpts) when is_integer(Port) ->
     gen_tcp:listen(Port, TcpOpts).
 
+%-------------------------------------------------------------------------------
 await_connections(Listen, Supervisor) ->
     case gen_tcp:accept(Listen) of
         {ok, Socket} ->
@@ -124,6 +184,7 @@ await_connections(Listen, Supervisor) ->
     end,
     await_connections(Listen, Supervisor).
 
+%-------------------------------------------------------------------------------
 supervise_connections(InitialState) ->
     process_flag(trap_exit, true),
     receive
@@ -143,6 +204,7 @@ supervise_connections(InitialState) ->
     end,
     supervise_connections(InitialState).
 
+%-------------------------------------------------------------------------------
 establish_control_connection(Socket, InitialState) ->
     respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
     IpAddress = case InitialState#connection_state.ip_address of
@@ -155,6 +217,7 @@ establish_control_connection(Socket, InitialState) ->
                  {gen_tcp, Socket},
                  InitialState#connection_state{control_socket=Socket, ip_address=IpAddress}).
 
+%-------------------------------------------------------------------------------
 control_loop(HookPid, {SocketMod, RawSocket} = Socket, State0) ->
     case SocketMod:recv(RawSocket, 0, State0#connection_state.control_timeout) of
         {ok, Input} ->
@@ -203,6 +266,7 @@ control_loop(HookPid, {SocketMod, RawSocket} = Socket, State0) ->
             {error, Reason}
     end.
 
+%-------------------------------------------------------------------------------
 respond(Socket, ResponseCode) ->
     respond(Socket, ResponseCode, response_code_string(ResponseCode) ++ ".").
 
@@ -210,19 +274,23 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
     Line = integer_to_list(ResponseCode) ++ " " ++ to_utf8(Message) ++ "\r\n",
     SocketMod:send(Socket, Line).
 
+%-------------------------------------------------------------------------------
 respond_raw({SocketMod, Socket}, Line) ->
     SocketMod:send(Socket, to_utf8(Line) ++ "\r\n").
 
+%-------------------------------------------------------------------------------
 respond_feature(Socket, Name, true) ->
 	respond_raw(Socket, " " ++ Name);
 respond_feature(_Socket, _Name, false) ->
 	ok.
 
+%-------------------------------------------------------------------------------
 ssl_options(State) ->
     [{keyfile, State#connection_state.ssl_key},
      {certfile, State#connection_state.ssl_cert},
      {cacertfile, State#connection_state.ssl_ca_cert}].
 
+%-------------------------------------------------------------------------------
 data_connection(ControlSocket, State) ->
     respond(ControlSocket, 150),
     case establish_data_connection(State) of
@@ -254,6 +322,7 @@ data_connection(ControlSocket, State) ->
     end.
 
 
+%-------------------------------------------------------------------------------
 % passive -- accepts an inbound connection
 establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
     gen_tcp:accept(Listen);
@@ -262,6 +331,7 @@ establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) -
 establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
     gen_tcp:connect(Addr, Port, [{active, false}, binary]).
 
+%-------------------------------------------------------------------------------
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
         {passive, PasvListen, _} ->
@@ -270,9 +340,9 @@ pasv_connection(ControlSocket, State) ->
             gen_tcp:close(PasvListen),
             pasv_connection(ControlSocket, State#connection_state{pasv_listen=undefined});
         undefined ->
-            case listen_socket(0, [{active, false}, binary]) of
+            case listen_socket(State#connection_state.port_range, [{active, false}, binary]) of
                 {ok, Listen} ->
-                    {ok, {_, Port}} = inet:sockname(Listen),
+					Port = get_socket_port(Listen),
                     Ip = State#connection_state.ip_address,
                     PasvSocketInfo = {passive,
                                       Listen,
@@ -293,6 +363,7 @@ pasv_connection(ControlSocket, State) ->
             end
     end.
 
+%-------------------------------------------------------------------------------
 %% put_file (stor) need a notification - when next command arrived there is a grarantee
 %% that previouse 'stor' command was executed successfully
 %% so this function notify about previous command
@@ -320,10 +391,12 @@ prev_cmd_notify(_Socket, State, Notif) ->
 			State#connection_state{prev_cmd_notify=undefined}
 	end.
 
+%-------------------------------------------------------------------------------
 disconnect(State, Type) ->
     Mod = State#connection_state.module,
     Mod:disconnect(State, Type).
 
+%-------------------------------------------------------------------------------
 -spec ftp_result(#connection_state{}, term()) -> term().
 ftp_result(State, {error}) ->
 	ftp_result(State, error);
@@ -353,8 +426,8 @@ ftp_result(_State, Data) ->
 ftp_result(State, Data, UserFunction) ->
 	ftp_result(State, UserFunction(State, Data)).
 
+%-------------------------------------------------------------------------------
 %% FTP COMMANDS
-
 ftp_command(Socket, State, Command, RawArg) ->
     Mod = State#connection_state.module,
 	case from_utf8(RawArg, State#connection_state.utf8) of
@@ -408,7 +481,7 @@ ftp_command(_Mod, Socket, State, feat, _Arg) ->
 ftp_command(_Mod, Socket, State, opts, Arg) ->
 	case string:to_upper(Arg) of
 		"UTF8 ON" when State#connection_state.utf8 =:= true ->
-			respond(Socket, 200, "Accepted");
+			respond(Socket, 200, "Accepted.");
 		_Option ->
 			respond(Socket, 501)
 	end,
@@ -717,6 +790,7 @@ ftp_command(_, Socket, State, Command, _Arg) ->
     respond(Socket, 500),
     {ok, State}.
 
+%-------------------------------------------------------------------------------
 write_fun(SendBlockSize,Socket, Fun) ->
     case Fun(SendBlockSize) of
         {ok, Bytes, NextFun} ->
@@ -728,18 +802,21 @@ write_fun(SendBlockSize,Socket, Fun) ->
 			Another
     end.
 
+%-------------------------------------------------------------------------------
 strip_newlines(S) ->
     lists:foldr(fun(C, A) ->
                        string:strip(A, right, C) end,
                 S,
                 "\r\n").
 
+%-------------------------------------------------------------------------------
 parse_input(Input) ->
     Tokens = string:tokens(Input, " "),
     [Command | Args] = lists:map(fun(S) -> strip_newlines(S) end,
                                  Tokens),
     {list_to_atom(string:to_lower(Command)), string:join(Args, " ")}.
 
+%-------------------------------------------------------------------------------
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
@@ -747,6 +824,7 @@ list_files_to_socket(DataSocket, Files) ->
               Files),
     ok.
 
+%-------------------------------------------------------------------------------
 list_file_names_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
@@ -754,15 +832,19 @@ list_file_names_to_socket(DataSocket, Files) ->
               Files),
     ok.
 
+%-------------------------------------------------------------------------------
 bf_send({SockMod, Socket}, Data) ->
     SockMod:send(Socket, Data).
 
+%-------------------------------------------------------------------------------
 bf_close({SockMod, Socket}) ->
     SockMod:close(Socket).
 
+%-------------------------------------------------------------------------------
 bf_recv({SockMod, Socket}) ->
     SockMod:recv(Socket, 0, infinity).
 
+%-------------------------------------------------------------------------------
 % Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
 response_code_string(120) -> "Service ready in nnn minutes";
@@ -805,8 +887,8 @@ response_code_string(552) -> "Requested file action aborted";
 response_code_string(553) -> "Requested action not taken";
 response_code_string(_) -> "N/A".
 
+%-------------------------------------------------------------------------------
 % Taken from jungerl/ftpd
-
 file_info_to_string(Info) ->
     format_type(Info#file_info.type) ++
         format_access(Info#file_info.mode) ++ " " ++
@@ -817,10 +899,12 @@ file_info_to_string(Info) ->
         format_date(Info#file_info.mtime) ++ " " ++
         Info#file_info.name.
 
+%-------------------------------------------------------------------------------
 format_mdtm_date({{Year, Month, Day}, {Hours, Mins, Secs}}) ->
     lists:flatten(io_lib:format("~4..0B~2..0B~2..0B~2..0B~2..0B~2..0B",
                                 [Year, Month, Day, Hours, Mins, erlang:trunc(Secs)])).
 
+%-------------------------------------------------------------------------------
 format_date({Date, Time}) ->
     {Year, Month, Day} = Date,
     {Hours, Min, _} = Time,
@@ -833,19 +917,24 @@ format_date({Date, Time}) ->
                 format_time(Hours, Min)
         end.
 
+%-------------------------------------------------------------------------------
 format_month_day(Month, Day) ->
     io_lib:format("~s ~2.2w", [month(Month), Day]).
 
+%-------------------------------------------------------------------------------
 format_year(Year) ->
     io_lib:format(" ~5.5w", [Year]).
 
+%-------------------------------------------------------------------------------
 format_time(Hours, Min) ->
     io_lib:format(" ~2.2.0w:~2.2.0w", [Hours, Min]).
 
+%-------------------------------------------------------------------------------
 format_type(file) -> "-";
 format_type(dir) -> "d";
 format_type(_) -> "?".
 
+%-------------------------------------------------------------------------------
 type_num(file) ->
     1;
 type_num(dir) ->
@@ -853,14 +942,17 @@ type_num(dir) ->
 type_num(_) ->
     0.
 
+%-------------------------------------------------------------------------------
 format_access(Mode) ->
     format_rwx(Mode bsr 6) ++ format_rwx(Mode bsr 3) ++ format_rwx(Mode).
 
+%-------------------------------------------------------------------------------
 format_rwx(Mode) ->
     [if Mode band 4 == 0 -> $-; true -> $r end,
      if Mode band 2 == 0 -> $-; true -> $w end,
      if Mode band 1 == 0 -> $-; true -> $x end].
 
+%-------------------------------------------------------------------------------
 format_number(X, N, LeftPad) when X >= 0 ->
     Ls = integer_to_list(X),
     Len = length(Ls),
@@ -869,6 +961,7 @@ format_number(X, N, LeftPad) when X >= 0 ->
             lists:duplicate(N - Len, LeftPad) ++ Ls
     end.
 
+%-------------------------------------------------------------------------------
 month(1) -> "Jan";
 month(2) -> "Feb";
 month(3) -> "Mar";
@@ -882,6 +975,7 @@ month(10) -> "Oct";
 month(11) -> "Nov";
 month(12) -> "Dec".
 
+%-------------------------------------------------------------------------------
 % parse address on form:
 % d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
 % h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
@@ -889,6 +983,7 @@ month(12) -> "Dec".
 parse_address(Str) ->
     paddr(Str, 0, []).
 
+%-------------------------------------------------------------------------------
 paddr([X|Xs],N,Acc) when X >= $0, X =< $9 -> paddr(Xs, N*10+(X-$0), Acc);
 paddr([X|Xs],_N,Acc) when X >= $A, X =< $F -> paddr(Xs,(X-$A)+10, Acc);
 paddr([X|Xs],_N,Acc) when X >= $a, X =< $f -> paddr(Xs, (X-$a)+10, Acc);
@@ -902,15 +997,18 @@ paddr([],P2,[P1|As]) when length(As) == 32 ->
     end;
 paddr(_, _, _) -> error.
 
+%-------------------------------------------------------------------------------
 addr6([H4,H3,H2,H1|Addr],Acc) when H4<16,H3<16,H2<16,H1<16 ->
     addr6(Addr, [H4 + H3*16 + H2*256 + H1*4096 |Acc]);
 addr6([], Acc) -> {ok, list_to_tuple(Acc)};
 addr6(_, _) -> error.
 
+%-------------------------------------------------------------------------------
 format_port(PortNumber) ->
     [A,B] = binary_to_list(<<PortNumber:16>>),
     {A, B}.
 
+%-------------------------------------------------------------------------------
 -spec format(string(), list()) -> string().
 format(FormatString, Args) ->
 	case catch io_lib:format(FormatString, Args) of
@@ -921,6 +1019,7 @@ format(FormatString, Args) ->
 			lists:flatten(Data)
 	end.
 
+%-------------------------------------------------------------------------------
 -spec format_error(integer() | string(), term()) -> string().
 format_error(Code, Reason) when is_integer(Code) ->
 	format_error(response_code_string(Code), Reason);
@@ -937,12 +1036,14 @@ format_error(Message, Reason) ->
 	end,
 	format(Format, [Message, Reason]) ++ ".".
 
+%-------------------------------------------------------------------------------
 from_utf8(String, true) ->
 	unicode:characters_to_list(erlang:list_to_binary(String), utf8);
 
 from_utf8(String, false) ->
 	String.
 
+%-------------------------------------------------------------------------------
 to_utf8(String) ->
 	to_utf8(String, true).
 
@@ -951,7 +1052,6 @@ to_utf8(String, true) ->
 
 to_utf8(String, false) ->
 	[if C > 255 orelse C<0 -> $?; true -> C end || C <- String].
-
 
 %===============================================================================
 % EUNIT TESTS
@@ -1056,6 +1156,7 @@ step(Pid) ->
 
 % stops the script
 finish(Pid) ->
+	?assertEqual({error, closed}, 	gen_tcp:recv(dummy_socket, 0, infinity)), % if fails - some step() forgotten
     Pid ! {done, self()}.
 
 
@@ -1227,17 +1328,20 @@ ssl_only_test() ->
 	ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
                        InitialState#connection_state{ssl_mode=only, utf8=false} end),
 
-
    Child = spawn_link(fun() ->
                        script_dialog([ {"USER hamster", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
                                        {"MKD /unicorns", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
                                        {"CWD /hamster", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
                                        {"PWD", "534 Request denied for policy reasons (only ftps allowed).\r\n"},
+									   {"OPTS UTF8 ON", "501 Syntax error in parameters or arguments.\r\n"},
 										{"FEAT", "211-Features\r\n"},
                                           {resp, socket, " AUTH TLS\r\n" },
                                           {resp, socket, " PROT\r\n" },
                                           {resp, socket, "211 End\r\n" }
                                            ]),
+                       step(ControlPid),
+                       step(ControlPid),
+                       step(ControlPid),
                        step(ControlPid),
                        step(ControlPid),
                        step(ControlPid),
@@ -1357,33 +1461,80 @@ pwd_test() ->
               end),
     execute(Child).
 
+passive_anyport_successful_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+    			meck:expect(gen_tcp, listen, fun(0, _) -> {ok, listen_socket} end),
+    			meck:expect(inet, sockname,  fun(listen_socket) -> {ok, {{127, 0, 0, 1}, 2000}} end),
+
+    			login_test_user(ControlPid, [{"PASV", "227 Entering Passive Mode (127,0,0,1,7,208)\r\n"}]),
+				?assertMatch({ok, #connection_state{pasv_listen={passive, listen_socket, {{127,0,0,1}, 2000}}}},
+					step(ControlPid)),
+                finish(ControlPid)
+              end),
+    execute(Child).
+
+passive_anyport_failure_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+    			meck:expect(gen_tcp, listen, fun(0, _) -> {error, eaddrinuse} end),
+    			login_test_user(ControlPid, [{"PASV", "425 Can't open data connection.\r\n"}]),
+				?assertMatch({ok, #connection_state{pasv_listen=undefined}}, step(ControlPid)),
+                finish(ControlPid)
+              end),
+    execute(Child).
+
+passive_port_range_successful_test() ->
+    setup(),
+	ok = meck:expect(fake_server, init,
+		fun(InitialState, _Opt) -> InitialState#connection_state{port_range={2000, 3000}} end),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+    			meck:expect(gen_tcp, listen, fun	(2500, _) -> {ok, listen_socket_2500};
+											 		(N, _) when is_integer(N) -> {error, eaddrinuse} end),
+
+    			meck:expect(inet, sockname,  fun(listen_socket_2500) -> {ok, {{127, 0, 0, 1}, 2500}} end),
+
+    			login_test_user(ControlPid, [{"PASV", "227 Entering Passive Mode (127,0,0,1,9,196)\r\n"}]),
+			  	ok = meck:new(random, [unstick]),
+				ok = meck:expect(random, uniform, fun(M) -> M end),
+				?assertMatch({ok, #connection_state{pasv_listen={passive, listen_socket_2500, {{127,0,0,1}, 2500}}}},
+					step(ControlPid)),
+			  	ok = meck:unload(random),
+                finish(ControlPid)
+              end),
+    execute(Child).
+
+passive_port_range_failure_test() ->
+    setup(),
+	ok = meck:expect(fake_server, init,
+		fun(InitialState, _Opt) -> InitialState#connection_state{port_range={2000, 4000}} end),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+    			meck:expect(gen_tcp, listen, fun(N, _) when is_integer(N), N>=2000, 4000>=N -> {error, eaddrinuse} end),
+			  	ok = meck:new(random, [unstick]),
+				ok = meck:expect(random, uniform, fun(M) -> M end),
+    			login_test_user(ControlPid, [{"PASV", "425 Can't open data connection.\r\n"}]),
+				?assertMatch({ok, #connection_state{pasv_listen=undefined}}, step(ControlPid)),
+			  	ok = meck:unload(random),
+                finish(ControlPid)
+              end),
+    execute(Child).
+
 login_test_user_with_data_socket(ControlPid, Script, passive) ->
-    meck:expect(gen_tcp,
-                listen,
-                fun(0, _) ->
-                        {ok, listen_socket}
-                end),
-
-    meck:expect(gen_tcp,
-                accept,
-                fun(listen_socket) ->
-                        {ok, data_socket}
-                end),
-
-    meck:expect(inet,
-                sockname,
-                fun(listen_socket) ->
-                        {ok, {{127, 0, 0, 1}, 2000}}
-                end),
+    meck:expect(gen_tcp, listen, fun(0, _) -> {ok, listen_socket} end),
+    meck:expect(gen_tcp, accept, fun(listen_socket) -> {ok, data_socket} end),
+    meck:expect(inet, sockname,  fun(listen_socket) -> {ok, {{127, 0, 0, 1}, 2000}} end),
 
     login_test_user(ControlPid, [{"PASV", "227 Entering Passive Mode (127,0,0,1,7,208)\r\n"}] ++ Script),
-    ControlPid ! {ack, self()},
-    receive
-        {new_state, _, #connection_state{pasv_listen={passive, listen_socket, {{127,0,0,1}, 2000}}}} ->
-            ok;
-        _ ->
-            ?assert(bad_value)
-    end;
+	?assertMatch(
+		{ok, #connection_state{pasv_listen={passive, listen_socket, {{127,0,0,1}, 2000}}}}, 	step(ControlPid));
 
 login_test_user_with_data_socket(ControlPid, Script, active) ->
     meck:expect(gen_tcp,
@@ -1392,11 +1543,7 @@ login_test_user_with_data_socket(ControlPid, Script, active) ->
                         {ok, data_socket}
                 end),
     login_test_user(ControlPid, [{"PORT 127,0,0,1,7,208", "200 Command okay.\r\n"}] ++ Script),
-    ControlPid ! {ack, self()},
-    receive
-        {new_state, _, #connection_state{data_port={active, {127,0,0,1}, 2000}}} ->
-            ok
-    end.
+	?assertMatch({ok, #connection_state{data_port={active, {127,0,0,1}, 2000}}}, step(ControlPid)).
 
 ?dataSocketTest(nlst_test).
 nlst_test(Mode) ->
@@ -1936,18 +2083,19 @@ utf8_success_test(Mode) ->
                BinData = <<"SOME DATA HERE">>,
 
                Script=[{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
+			   		   {"OPTS UTF8 ON", "200 Accepted.\r\n"},
                        {"CWD " ++ UtfFileName, "250 Directory changed to \""++ UtfFileName ++"\".\r\n"},
                        {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
                        {req, data_socket, BinData},
                        {resp, socket, "226 Closing data connection.\r\n"},
                        {"LIST", "150 File status okay; about to open data connection.\r\n"},
                        {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
-                       {resp, socket, "226 Closing data connection.\r\n"},
-                       {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}],
+                       {resp, socket, "226 Closing data connection.\r\n"}],
 
                ok = meck:expect(fake_server,current_directory, fun(_) -> FileName end),
 
                login_test_user_with_data_socket(ControlPid, Script, Mode),
+               step(ControlPid),
                step(ControlPid),
 
                meck:expect(fake_server,change_directory,
@@ -2001,12 +2149,14 @@ utf8_failure_test(Mode) ->
 			UtfFileNameOk = to_utf8(FileName), %milk-eggs
 			{UtfFileNameErr, _} = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
 
-			Script =[{"CWD " ++ UtfFileNameErr, "501 Syntax error in parameters or arguments.\r\n"}],
+			Script =[	{"OPTS UTF8 ON", "200 Accepted.\r\n"},
+						{"CWD " ++ UtfFileNameErr, "501 Syntax error in parameters or arguments.\r\n"}],
 
 			ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 			ok = meck:expect(error_logger, warning_report, fun({bifrost, incomplete_utf8, _}) -> ok end),
 
 			login_test_user_with_data_socket(ControlPid, Script, Mode),
+			step(ControlPid),
 			step(ControlPid),
 			finish(ControlPid)
 		end),

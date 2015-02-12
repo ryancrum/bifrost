@@ -50,8 +50,13 @@ init(InitialState, _) ->
     InitialState.
 
 % All users w/o any requirements
-check_user(State, Arg) ->
-	{ok, State};
+check_user(State, Username) ->
+	case Username of
+		"root" ->
+			{error, "root account is locked for ftp", State};
+		_Another ->
+			{ok, State}
+	end.
 
 % Authenticate the user. Return {false, State} to fail.
 login(State, _Username, _Password) ->
