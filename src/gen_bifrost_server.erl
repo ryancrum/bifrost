@@ -24,7 +24,13 @@ behaviour_info(callbacks) ->
 	% GetFun(ByteCount) -> {ok, Bytes, NextGetFun} | {done, NewState} | StateChangeError
 	%
     [{init, 2}, % State, PropList (options) -> State
-     {login, 3}, % State, Username, Password -> {true OR false, State} | 'quit'(disconnect client)
+     {login, 3}, 	% State, Username, Password -> {true OR false, State} | 'quit'(disconnect client)
+     {check_user, 2}, 	% State, Username, {ok, NewState} | {error, Reason, NewState}, 'quit'(disconnect client)
+	 					% SECURE NOTE: Does not use check_user for testing is user available,
+						% and return {ok, State} for all unexisting users,
+						% because USER+PASS obfuscate is user exist and bad password, or no user
+						% This function should used for connection's settings like
+						% USER requires SSL, USER can access from some IP and etc
      {current_directory, 1}, % State -> Path
      {make_directory, 2}, % State, Path -> StateChange
      {change_directory, 2}, % State, Path -> StateChange

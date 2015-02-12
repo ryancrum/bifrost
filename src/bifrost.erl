@@ -437,9 +437,17 @@ ftp_command(_, Socket, State, pbsz, "0") ->
     respond(Socket, 200),
     {ok, State};
 
-ftp_command(_, Socket, State, user, Arg) ->
-    respond(Socket, 331),
-    {ok, State#connection_state{user_name=Arg}};
+ftp_command(Mod, Socket, State, user, Arg) ->
+	case ftp_result(State, Mod:check_user(State, Arg)) of
+		{ok, NewState} ->
+    		respond(Socket, 331),
+	    	{ok, NewState#connection_state{user_name=Arg, authenticated_state=unauthenticated}};
+
+	{error, Reason, _State} ->
+		error_logger:warning_report({bifrost, user_check, Reason}),
+    	respond(Socket, 421, format_error("Login requirements", Reason)),
+		{error, auth}
+	end;
 
 ftp_command(_, Socket, State, port, Arg) ->
     case parse_address(Arg) of
@@ -1136,8 +1144,10 @@ login_test_user(SocketPid, Script) ->
                    {req, socket, "PASS meatmeat"},
                    {resp, socket, "230 User logged in, proceed.\r\n"}] ++ Script),
 
+	ok = meck:expect(fake_server, check_user, fun(S, _A) -> {ok, S} end),
 	step(SocketPid), % USER meat
-    meck:expect(fake_server,
+
+    ok = meck:expect(fake_server,
                 login,
                 fun(St, "meat", "meatmeat") ->
                         {true, St#connection_state{authenticated_state=authenticated}}
@@ -1165,6 +1175,7 @@ authenticate_failure_test() ->
                   				{"PASS meatmeat", "530 Login incorrect.\r\n"}]),
 				ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
 				ok = meck:expect(fake_server, login, fun(_, "meat", "meatmeat") -> {error} end),
+				ok = meck:expect(fake_server, check_user, fun(S, _A) -> {ok, S} end),
 				ok = meck:expect(fake_server, disconnect, fun(_, {error, auth}) -> ok end),
 				{ok, State} = step(ControlPid),
 				?assertMatch(#connection_state{authenticated_state=unauthenticated}, State),
@@ -1172,6 +1183,26 @@ authenticate_failure_test() ->
 				finish(ControlPid)
               end),
 
+	execute(Child).
+
+requirements_failure_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+    			script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
+							   {"USER heat", "421 Login requirements (DENY).\r\n"}]),
+				ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
+				ok = meck:expect(fake_server, check_user, fun(S, "meat") -> {ok, S};
+															 (S, "heat") -> {error, "DENY", S} end),
+				ok = meck:expect(fake_server, disconnect, fun(_, {error, auth}) -> ok end),
+				{ok, State} = step(ControlPid),
+				?assertMatch(#connection_state{authenticated_state=unauthenticated}, State),
+				{ok, State} = step(ControlPid),
+				?assertMatch(#connection_state{authenticated_state=unauthenticated}, State),
+				step(ControlPid), % last event will  be disconnect with reason auth fail
+				finish(ControlPid)
+              end),
 	execute(Child).
 
 unauthenticated_test() ->

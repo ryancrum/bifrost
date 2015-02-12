@@ -14,6 +14,7 @@
 % Bifrost callbacks
 -export([login/3,
          init/2,
+		 check_user/2,
          current_directory/1,
          make_directory/2,
          change_directory/2,
@@ -47,6 +48,10 @@
 % Initialize the state
 init(InitialState, _) ->
     InitialState.
+
+% All users w/o any requirements
+check_user(State, Arg) ->
+	{ok, State};
 
 % Authenticate the user. Return {false, State} to fail.
 login(State, _Username, _Password) ->
