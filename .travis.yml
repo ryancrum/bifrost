@@ -1,3 +1,4 @@
 language: erlang
+sudo: false
 otp_release:
-   - R14B04
+  - 17.1
