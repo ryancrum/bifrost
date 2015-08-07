@@ -91,7 +91,7 @@ Bifröst includes explicit FTP/SSL support. To use this functionality, just add 
 
 ### UTF-8
 
-Bifröst will advertise UTF8 support to clients if enabled with {utf8, true} in startup options. If advertised, it is up to implementation to encode data as required.
+Bifröst will advertise UTF8 support to clients if enabled with {utf8, true} in startup options. If advertised, it is up to the implementation to encode data as required.
 
 ### Contributions
 
