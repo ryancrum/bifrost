@@ -1,3 +1,5 @@
+# BIFROST IS DEPRECATED AND I NO LONGER SUPPORT OR MAINTAIN IT.
+
 # Bifröst
 Erlang FTP Server Framework
 
